@@ -40,6 +40,7 @@ class DownloadTask:
     format_selector: str
     audio_only: bool
     output_dir: str
+    quality_label: str = ""
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
 
     status: str = QUEUED
@@ -265,6 +266,18 @@ def build_format_options(info: dict) -> list[dict]:
     options.append({"label": "Audio only (MP3)",
                     "selector": AUDIO_MP3, "audio_only": True})
     return options
+
+
+def quality_label(selector: str, audio_only: bool) -> str:
+    """A short, human label for a format selector (for history/UI)."""
+    import re
+
+    if audio_only or selector == AUDIO_MP3:
+        return "MP3"
+    m = re.search(r"height<=(\d+)", selector or "")
+    if m:
+        return f"{m.group(1)}p"
+    return "Best"
 
 
 def extract_formats(url: str) -> dict:

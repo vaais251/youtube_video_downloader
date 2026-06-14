@@ -7,7 +7,8 @@ A clean, IDM-style desktop YouTube downloader.
 - **Merging / MP3:** ffmpeg
 - **Speed:** aria2c multi-connection downloads when available
 - **Queue:** pause / resume / cancel / retry, per-item progress bars
-- **Browser hand-off:** a small Chrome extension sends the current tab's URL to the app
+- **History:** persistent, IDM-style download history you can clear or prune
+- **Browser hand-off:** a Chrome extension with an in-player download button
 
 ## Features
 
@@ -15,6 +16,9 @@ A clean, IDM-style desktop YouTube downloader.
 - Pick a resolution (720p, 1080p, …) or **Audio only (MP3)**
 - Multi-connection downloading via aria2c (toggle in the toolbar)
 - Download queue with progress, speed, ETA, and pause/resume
+- **Download history** in a separate tab — open file, open folder, re-download,
+  delete from disk, remove from list, or clear all (persisted to
+  `~/.ytdownloader/history.json`)
 - Choose the output folder (remembered between runs)
 - **Update yt-dlp** button — YouTube breaks downloaders often; update without reinstalling
 
@@ -71,11 +75,14 @@ To install (unpacked):
 
 Ways to download (the desktop app must be running):
 
-- **Popup (choose quality):** click the toolbar icon. It fetches the available
-  qualities from the app, you pick one (or *Audio only (MP3)*) and hit
-  **Download** — the file is queued instantly in the app.
-- **Right-click → Download (best quality):** true one-click download at best
-  quality, no popup.
+- **In-player button (IDM-style):** on any YouTube watch page a small
+  **⬇ Download** button appears in the top-left of the video. Click it → a popup
+  lets you pick a quality (or *Audio only (MP3)*) → **Download**. Nothing else to
+  touch. (The content script routes requests through the extension's background
+  worker, so YouTube's CSP doesn't block it.)
+- **Popup (choose quality):** click the toolbar icon for the same picker for the
+  current tab.
+- **Right-click → Download (best quality):** true one-click at best quality.
 - **Right-click → Download audio (MP3):** one-click audio extraction.
 
 Endpoints used by the extension:
@@ -95,11 +102,15 @@ Endpoints used by the extension:
 ```
 src/ytdownloader/
   main.py              entry point
-  app.py               PyQt6 window, queue rows, settings, yt-dlp updater
-  download_manager.py  yt-dlp workers + queue/pause/resume/cancel
+  app.py               PyQt6 window, tabs (Downloads/History), settings, updater
+  download_manager.py  yt-dlp workers + queue/pause/resume/cancel, format helpers
+  history.py           persistent download history (JSON)
   ipc_server.py        localhost server for the Chrome extension
   utils.py             ffmpeg/aria2c detection, helpers
 extension/             Manifest V3 Chrome extension
+  background.js        service worker: context menus + app relay
+  content.js/.css      in-player download button + quality popup
+  popup.html/.js       toolbar popup quality picker
 ```
 
 ## Notes & limitations

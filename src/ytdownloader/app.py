@@ -8,19 +8,25 @@ import sys
 from PyQt6.QtCore import QObject, QRunnable, Qt, QThreadPool, QSettings, pyqtSignal
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -38,7 +44,9 @@ from .download_manager import (
     DownloadTask,
     InfoWorker,
     build_format_options,
+    quality_label,
 )
+from .history import HistoryStore
 from .ipc_server import IpcBridge, IpcServer
 
 
@@ -100,7 +108,35 @@ QCheckBox { spacing: 6px; }
 QStatusBar { background: #ffffff; border-top: 1px solid #e3e6ea; color: #57606a; }
 QLabel#h1 { font-size: 15px; font-weight: 700; }
 QLabel#section { font-size: 13px; font-weight: 600; color: #3a4047; }
+
+QTabWidget::pane { border: none; top: -1px; }
+QTabBar::tab { background: transparent; color: #57606a; padding: 8px 16px;
+               border: none; border-bottom: 2px solid transparent; font-weight: 600; }
+QTabBar::tab:selected { color: #e53935; border-bottom: 2px solid #e53935; }
+QTabBar::tab:hover:!selected { color: #1f2328; }
+
+QTableWidget { background: #ffffff; border: 1px solid #e7eaee; border-radius: 12px;
+               gridline-color: #eef0f2; outline: none; }
+QTableWidget::item { padding: 6px 8px; }
+QTableWidget::item:selected { background: #fdecea; color: #1f2328; }
+QHeaderView::section { background: #f7f8fa; color: #57606a; border: none;
+                       border-bottom: 1px solid #e7eaee; padding: 8px; font-weight: 600; }
 """
+
+
+def _selector_for_label(label: str) -> str:
+    """Reverse of quality_label: turn a stored label back into a selector."""
+    import re
+
+    if not label or label.lower().startswith("best"):
+        return "bestvideo+bestaudio/best"
+    if label.upper() == "MP3":
+        return AUDIO_MP3
+    m = re.search(r"(\d+)", label)
+    if m:
+        h = m.group(1)
+        return f"bestvideo[height<={h}]+bestaudio/best[height<={h}]"
+    return "bestvideo+bestaudio/best"
 
 
 # --- yt-dlp self-update worker --------------------------------------------
@@ -296,6 +332,9 @@ class MainWindow(QMainWindow):
         self.rows: dict[str, QueueItemWidget] = {}
         self._pending_info = None  # cached info dict after a fetch
 
+        self.history = HistoryStore()
+        self._recorded: set[str] = set()  # task ids already written to history
+
         self._build_ui()
         self._start_ipc()
         self._report_environment()
@@ -392,27 +431,65 @@ class MainWindow(QMainWindow):
 
         root.addWidget(card)
 
-        # queue
-        queue_label = QLabel("Downloads")
-        queue_label.setObjectName("section")
-        root.addWidget(queue_label)
+        # tabs: Active downloads + History
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_active_tab(), "Downloads")
+        self.tabs.addTab(self._build_history_tab(), "History")
+        root.addWidget(self.tabs, 1)
 
+        self.statusBar()
+
+    def _build_active_tab(self) -> QWidget:
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         container = QWidget()
         self.queue_layout = QVBoxLayout(container)
-        self.queue_layout.setContentsMargins(0, 0, 0, 0)
+        self.queue_layout.setContentsMargins(2, 6, 2, 2)
         self.queue_layout.setSpacing(10)
-        self.empty_label = QLabel("No downloads yet — fetch a URL above,\n"
+        self.empty_label = QLabel("No active downloads — fetch a URL above,\n"
                                   "or send one from the browser extension.")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_label.setStyleSheet("color: #9aa0a6; padding: 28px;")
         self.queue_layout.addWidget(self.empty_label)
         self.queue_layout.addStretch(1)
         self.scroll.setWidget(container)
-        root.addWidget(self.scroll, 1)
+        return self.scroll
 
-        self.statusBar()
+    def _build_history_tab(self) -> QWidget:
+        wrap = QWidget()
+        v = QVBoxLayout(wrap)
+        v.setContentsMargins(2, 6, 2, 2)
+        v.setSpacing(8)
+
+        bar = QHBoxLayout()
+        self.history_count = QLabel("")
+        self.history_count.setStyleSheet("color: #57606a;")
+        bar.addWidget(self.history_count, 1)
+        btn_clear = QPushButton("Clear History")
+        btn_clear.clicked.connect(self._clear_history)
+        bar.addWidget(btn_clear)
+        v.addLayout(bar)
+
+        self.history_table = QTableWidget(0, 5)
+        self.history_table.setHorizontalHeaderLabels(
+            ["Name", "Quality", "Size", "Date", "Status"])
+        self.history_table.verticalHeader().setVisible(False)
+        self.history_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.history_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows)
+        self.history_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection)
+        self.history_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.history_table.customContextMenuRequested.connect(self._history_menu)
+        self.history_table.doubleClicked.connect(lambda _i: self._history_open_file())
+        hdr = self.history_table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for col in (1, 2, 3, 4):
+            hdr.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        v.addWidget(self.history_table, 1)
+
+        self._refresh_history()
+        return wrap
 
     # -- environment / ipc
     def _report_environment(self):
@@ -450,6 +527,7 @@ class MainWindow(QMainWindow):
         selector = payload.get("selector") or "bestvideo+bestaudio/best"
         audio_only = bool(payload.get("audio_only")) or selector == AUDIO_MP3
         title = payload.get("title") or url
+        label = payload.get("label") or quality_label(selector, audio_only)
 
         task = DownloadTask(
             url=url,
@@ -457,6 +535,7 @@ class MainWindow(QMainWindow):
             format_selector="bestaudio/best" if audio_only else selector,
             audio_only=audio_only,
             output_dir=self.output_dir,
+            quality_label=label,
         )
         self.manager.add_task(task)
         self._add_row(task)
@@ -518,6 +597,7 @@ class MainWindow(QMainWindow):
             format_selector="bestaudio/best" if audio_only else selector,
             audio_only=audio_only,
             output_dir=self.output_dir,
+            quality_label=self.format_combo.currentText(),
         )
         self.manager.add_task(task)
         self._add_row(task)
@@ -541,6 +621,128 @@ class MainWindow(QMainWindow):
         row = self.rows.get(task_id)
         if row is not None:
             row.refresh()
+        task = self.manager.tasks.get(task_id)
+        if task and task.status == COMPLETED and task_id not in self._recorded:
+            self._record_history(task)
+
+    # -- history
+    def _record_history(self, task: DownloadTask) -> None:
+        self._recorded.add(task.id)
+        self.history.add(
+            id=task.id,
+            title=task.title,
+            url=task.url,
+            quality_label=task.quality_label or quality_label(
+                task.format_selector, task.audio_only),
+            audio_only=task.audio_only,
+            filepath=task.filename,
+            size=task.total,
+            status="Completed",
+        )
+        self._refresh_history()
+
+    def _refresh_history(self) -> None:
+        entries = self.history.entries
+        self.history_table.setRowCount(len(entries))
+        for r, e in enumerate(entries):
+            name = QTableWidgetItem(e.get("title", ""))
+            name.setData(Qt.ItemDataRole.UserRole, e.get("id"))
+            name.setToolTip(e.get("filepath") or e.get("url", ""))
+            date = (e.get("finished_at", "") or "").replace("T", "  ")
+            cells = [
+                name,
+                QTableWidgetItem(e.get("quality_label", "")),
+                QTableWidgetItem(e.get("size", "") or "—"),
+                QTableWidgetItem(date),
+                QTableWidgetItem(e.get("status", "")),
+            ]
+            for c, item in enumerate(cells):
+                self.history_table.setItem(r, c, item)
+        n = len(entries)
+        self.history_count.setText(f"{n} item{'s' if n != 1 else ''}")
+        self.tabs.setTabText(1, f"History ({n})" if n else "History")
+
+    def _selected_history_entry(self) -> dict | None:
+        row = self.history_table.currentRow()
+        if row < 0:
+            return None
+        item = self.history_table.item(row, 0)
+        if not item:
+            return None
+        entry_id = item.data(Qt.ItemDataRole.UserRole)
+        return next((e for e in self.history.entries if e.get("id") == entry_id), None)
+
+    def _history_menu(self, pos) -> None:
+        entry = self._selected_history_entry()
+        if not entry:
+            return
+        menu = QMenu(self)
+        act_open = menu.addAction("Open file")
+        act_folder = menu.addAction("Open containing folder")
+        menu.addSeparator()
+        act_redl = menu.addAction("Download again")
+        menu.addSeparator()
+        act_del_disk = menu.addAction("Delete from disk")
+        act_remove = menu.addAction("Remove from history")
+        chosen = menu.exec(self.history_table.viewport().mapToGlobal(pos))
+        if chosen == act_open:
+            self._history_open_file()
+        elif chosen == act_folder:
+            utils.open_in_file_manager(entry.get("filepath") or self.output_dir)
+        elif chosen == act_redl:
+            self._history_redownload(entry)
+        elif chosen == act_del_disk:
+            self._history_delete_from_disk(entry)
+        elif chosen == act_remove:
+            self.history.remove(entry["id"])
+            self._refresh_history()
+
+    def _history_open_file(self) -> None:
+        entry = self._selected_history_entry()
+        if entry:
+            utils.open_in_file_manager(entry.get("filepath") or self.output_dir)
+
+    def _history_redownload(self, entry: dict) -> None:
+        audio_only = bool(entry.get("audio_only"))
+        label = entry.get("quality_label", "")
+        selector = AUDIO_MP3 if audio_only else _selector_for_label(label)
+        self._on_ipc_download({
+            "url": entry.get("url", ""),
+            "selector": "bestaudio/best" if audio_only else selector,
+            "audio_only": audio_only,
+            "title": entry.get("title", ""),
+            "label": label,
+        })
+        self.tabs.setCurrentIndex(0)
+
+    def _history_delete_from_disk(self, entry: dict) -> None:
+        path = entry.get("filepath")
+        if not path:
+            QMessageBox.information(self, "No file", "No file path was recorded for this item.")
+            return
+        if QMessageBox.question(
+            self, "Delete file",
+            f"Permanently delete this file from disk?\n\n{path}",
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        import os
+        try:
+            os.remove(path)
+        except OSError as exc:
+            QMessageBox.warning(self, "Delete failed", str(exc))
+            return
+        self.history.remove(entry["id"])
+        self._refresh_history()
+
+    def _clear_history(self) -> None:
+        if not self.history.entries:
+            return
+        if QMessageBox.question(
+            self, "Clear history",
+            "Remove all items from the download history?\n(Files on disk are kept.)",
+        ) == QMessageBox.StandardButton.Yes:
+            self.history.clear()
+            self._refresh_history()
 
     # -- settings handlers
     def _choose_folder(self):

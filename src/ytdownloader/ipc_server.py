@@ -103,6 +103,7 @@ def _make_handler(bridge: IpcBridge):
                     "selector": data.get("selector") or "bestvideo+bestaudio/best",
                     "audio_only": bool(data.get("audio_only")),
                     "title": data.get("title") or url,
+                    "label": data.get("label") or "",
                 })
                 self._json(200, {"ok": True})
 
