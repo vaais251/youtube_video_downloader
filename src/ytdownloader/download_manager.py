@@ -236,6 +236,57 @@ class InfoWorker(QRunnable):
             self.signals.error.emit(str(exc))
 
 
+# --- format options (shared by GUI and the browser extension) --------------
+
+AUDIO_MP3 = "__audio_mp3__"  # sentinel selector meaning "audio only -> MP3"
+
+
+def build_format_options(info: dict) -> list[dict]:
+    """Turn a yt-dlp info dict into a list of pickable quality options.
+
+    Each option is ``{"label", "selector", "audio_only"}``. Used both to fill
+    the desktop combo box and to answer the extension's ``/formats`` request.
+    """
+    options: list[dict] = [
+        {"label": "Best quality (auto)",
+         "selector": "bestvideo+bestaudio/best",
+         "audio_only": False}
+    ]
+    heights = set()
+    for f in info.get("formats", []) or []:
+        if f.get("vcodec") and f.get("vcodec") != "none" and f.get("height"):
+            heights.add(int(f["height"]))
+    for h in sorted(heights, reverse=True):
+        options.append({
+            "label": f"{h}p",
+            "selector": f"bestvideo[height<={h}]+bestaudio/best[height<={h}]",
+            "audio_only": False,
+        })
+    options.append({"label": "Audio only (MP3)",
+                    "selector": AUDIO_MP3, "audio_only": True})
+    return options
+
+
+def extract_formats(url: str) -> dict:
+    """Synchronously fetch metadata + quality options for a URL.
+
+    Runs yt-dlp inline (no Qt), so it is safe to call from the IPC server
+    thread. Returns ``{title, duration, webpage_url, options}``.
+    """
+    import yt_dlp
+
+    opts = {"quiet": True, "no_warnings": True, "noplaylist": True}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+    info = info or {}
+    return {
+        "title": info.get("title", ""),
+        "duration": info.get("duration"),
+        "webpage_url": info.get("webpage_url", url),
+        "options": build_format_options(info),
+    }
+
+
 # --- manager ---------------------------------------------------------------
 
 

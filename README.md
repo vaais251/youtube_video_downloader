@@ -60,8 +60,8 @@ uv pip install --upgrade yt-dlp
 ## Chrome extension
 
 The desktop app runs a tiny local server on `http://127.0.0.1:8765`. The
-extension POSTs the current tab's URL there; the app pops to the front and
-fetches its formats automatically.
+extension talks to it directly, so you can **pick a quality and download from the
+browser without ever touching the desktop window**.
 
 To install (unpacked):
 
@@ -69,8 +69,23 @@ To install (unpacked):
 2. Enable **Developer mode** (top right)
 3. Click **Load unpacked** and select the `extension/` folder
 
-Then either click the toolbar icon → **Send current tab**, or right-click a page,
-link, or video → **Send to YT Downloader**. The desktop app must be running.
+Ways to download (the desktop app must be running):
+
+- **Popup (choose quality):** click the toolbar icon. It fetches the available
+  qualities from the app, you pick one (or *Audio only (MP3)*) and hit
+  **Download** — the file is queued instantly in the app.
+- **Right-click → Download (best quality):** true one-click download at best
+  quality, no popup.
+- **Right-click → Download audio (MP3):** one-click audio extraction.
+
+Endpoints used by the extension:
+
+| Method | Path        | Purpose                                  |
+|--------|-------------|------------------------------------------|
+| GET    | `/ping`     | liveness check                           |
+| POST   | `/formats`  | `{url}` → available quality options      |
+| POST   | `/download` | `{url, selector, audio_only, title}`     |
+| POST   | `/add`      | `{url}` → open it in the app to pick      |
 
 > The extension references optional notification icons under `extension/icons/`.
 > Notifications are best-effort; the extension works without the icon files.
