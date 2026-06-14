@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body {
+        width: 280px;
+        font-family: system-ui, sans-serif;
+        margin: 0;
+        padding: 14px;
+      }
+      h1 { font-size: 14px; margin: 0 0 10px; }
+      #url {
+        font-size: 11px;
+        color: #555;
+        word-break: break-all;
+        margin-bottom: 12px;
+        max-height: 48px;
+        overflow: hidden;
+      }
+      button {
+        width: 100%;
+        padding: 9px;
+        font-size: 13px;
+        border: 0;
+        border-radius: 6px;
+        background: #c0392b;
+        color: #fff;
+        cursor: pointer;
+      }
+      button:hover { background: #a93226; }
+      button:disabled { background: #aaa; cursor: default; }
+      #status { margin-top: 10px; font-size: 12px; text-align: center; min-height: 16px; }
+      .ok { color: #1e8449; }
+      .err { color: #c0392b; }
+    </style>
+  </head>
+  <body>
+    <h1>Send to YT Downloader</h1>
+    <div id="url">…</div>
+    <button id="send">Send current tab</button>
+    <div id="status"></div>
+    <script src="popup.js"></script>
+  </body>
+</html>

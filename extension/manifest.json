@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Send to YT Downloader",
+  "version": "1.0.0",
+  "description": "Send the current tab's URL to the desktop YT Downloader app.",
+  "permissions": ["tabs", "contextMenus", "notifications"],
+  "host_permissions": ["http://127.0.0.1:8765/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Send to YT Downloader",
+    "default_popup": "popup.html"
+  }
+}
