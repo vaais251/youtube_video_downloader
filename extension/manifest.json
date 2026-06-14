@@ -1,23 +1,35 @@
 {
   "manifest_version": 3,
-  "name": "Send to YT Downloader",
-  "version": "1.0.0",
-  "description": "Send the current tab's URL to the desktop YT Downloader app.",
-  "permissions": ["tabs", "contextMenus", "notifications"],
-  "host_permissions": ["http://127.0.0.1:8765/*"],
+  "name": "YT Downloader Integration",
+  "version": "2.0.0",
+  "description": "Download videos and any file (docs, archives, music, movies) through the YT Downloader desktop app.",
+  "permissions": ["tabs", "contextMenus", "notifications", "downloads", "cookies", "storage", "webRequest"],
+  "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"
   },
   "content_scripts": [
     {
-      "matches": ["*://www.youtube.com/*", "*://m.youtube.com/*"],
+      "matches": ["*://*/*"],
       "js": ["content.js"],
       "css": ["content.css"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "action": {
-    "default_title": "Send to YT Downloader",
-    "default_popup": "popup.html"
+    "default_title": "YT Downloader Integration",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
   }
 }

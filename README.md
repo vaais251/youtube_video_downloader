@@ -1,14 +1,19 @@
-# YT Downloader
+# YT Downloader 2.0
 
-A clean, IDM-style desktop YouTube downloader.
+A clean, IDM-style desktop **download manager** — videos *and any file*.
 
+- **General downloads:** the browser extension intercepts downloads of any type
+  (zip, exe, pdf, music, movies, …) and downloads them through the app — just
+  like IDM. Cookies/referrer are passed so authenticated downloads work.
 - **GUI:** PyQt6
-- **Engine:** [yt-dlp](https://github.com/yt-dlp/yt-dlp) (bundled as a dependency, one-click updatable)
+- **Media engine:** [yt-dlp](https://github.com/yt-dlp/yt-dlp) (bundled, one-click updatable)
+- **File engine:** aria2c multi-connection (with a pure-Python resumable fallback)
 - **Merging / MP3:** ffmpeg
-- **Speed:** aria2c multi-connection downloads when available
 - **Queue:** pause / resume / cancel / retry, per-item progress bars
+- **Categories:** auto-sorts downloads into **Video / Music / Documents /
+  Compressed / Programs** subfolders (like IDM); toggle with *Sort into folders*
 - **History:** persistent, IDM-style download history you can clear or prune
-- **Browser hand-off:** a Chrome extension with an in-player download button
+- **Browser integration:** in-player YouTube button + download capture toggle
 
 ## Features
 
@@ -75,15 +80,26 @@ To install (unpacked):
 
 Ways to download (the desktop app must be running):
 
-- **In-player button (IDM-style):** on any YouTube watch page a small
-  **⬇ Download** button appears in the top-left of the video. Click it → a popup
-  lets you pick a quality (or *Audio only (MP3)*) → **Download**. Nothing else to
-  touch. (The content script routes requests through the extension's background
-  worker, so YouTube's CSP doesn't block it.)
-- **Popup (choose quality):** click the toolbar icon for the same picker for the
-  current tab.
-- **Right-click → Download (best quality):** true one-click at best quality.
-- **Right-click → Download audio (MP3):** one-click audio extraction.
+- **Automatic capture (the IDM behaviour):** with **Capture browser downloads**
+  enabled (toolbar popup), any file you download in the browser — zip, exe, pdf,
+  mp3, mp4, … — is intercepted and downloaded through the app instead, with the
+  page's cookies/referrer attached. Toggle it off anytime.
+- **In-player button (any site):** a **⬇ Download** button floats over videos on
+  any website. Click it → pick a quality or a **detected stream** → **Download**.
+- **Media sniffing (IDM-style):** the extension watches the page's network
+  requests and detects media streams — including **HLS (`.m3u8`)** and **DASH
+  (`.mpd`)** — capturing the exact referer/cookies/user-agent the browser used.
+  These appear in the button's menu (marked with ●) and download with the right
+  headers (HLS/DASH are assembled by yt-dlp + ffmpeg). This is what makes tricky
+  streaming sites work.
+- **Popup (choose quality):** click the toolbar icon for the same picker.
+- **Right-click → Download video / audio (MP3):** one-click media download.
+- **Right-click a link → Download this link with YT Downloader:** capture any
+  direct link as a file.
+
+Capturing needs broader permissions (`downloads`, `cookies`, all-sites host
+access) so the extension can see downloads and read cookies for the file's site.
+Images are excluded by default so it doesn't grab every inline picture.
 
 Endpoints used by the extension:
 
@@ -103,7 +119,7 @@ Endpoints used by the extension:
 src/ytdownloader/
   main.py              entry point
   app.py               PyQt6 window, tabs (Downloads/History), settings, updater
-  download_manager.py  yt-dlp workers + queue/pause/resume/cancel, format helpers
+  download_manager.py  media (yt-dlp) + file (aria2c/python) workers, queue, formats
   history.py           persistent download history (JSON)
   ipc_server.py        localhost server for the Chrome extension
   utils.py             ffmpeg/aria2c detection, helpers

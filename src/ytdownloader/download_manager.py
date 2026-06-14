@@ -33,6 +33,11 @@ ERROR = "error"
 CANCELED = "canceled"
 
 
+# Engine that handles a task.
+ENGINE_MEDIA = "media"   # yt-dlp (YouTube and other sites, format selection)
+ENGINE_FILE = "file"     # direct download of any file (IDM-style capture)
+
+
 @dataclass
 class DownloadTask:
     url: str
@@ -41,7 +46,15 @@ class DownloadTask:
     audio_only: bool
     output_dir: str
     quality_label: str = ""
+    engine: str = ENGINE_MEDIA
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
+
+    # Generic-file metadata (used when engine == ENGINE_FILE).
+    out_name: str = ""        # suggested filename
+    referrer: str = ""
+    cookies: str = ""         # raw "Cookie:" header value
+    user_agent: str = ""
+    mime: str = ""
 
     status: str = QUEUED
     progress: float = 0.0          # 0..100
@@ -55,6 +68,14 @@ class DownloadTask:
     # Cooperative control flags (set from the GUI thread, read in the worker).
     pause_event: threading.Event = field(default_factory=threading.Event, repr=False)
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
+
+
+def file_kind(name: str) -> str:
+    """A short uppercase label for a filename's type, e.g. 'ZIP', 'PDF'."""
+    import os
+
+    ext = os.path.splitext(name or "")[1].lstrip(".").upper()
+    return ext or "FILE"
 
 
 class _Paused(Exception):
@@ -132,6 +153,17 @@ class DownloadWorker(QRunnable):
         if ff_dir:
             opts["ffmpeg_location"] = ff_dir
 
+        # Pass through the browser's headers for sniffed/protected streams.
+        hdrs = {}
+        if task.user_agent:
+            hdrs["User-Agent"] = task.user_agent
+        if task.referrer:
+            hdrs["Referer"] = task.referrer
+        if task.cookies:
+            hdrs["Cookie"] = task.cookies
+        if hdrs:
+            opts["http_headers"] = hdrs
+
         if task.audio_only:
             if has_ffmpeg:
                 opts["format"] = "bestaudio/best"
@@ -164,12 +196,12 @@ class DownloadWorker(QRunnable):
             else:
                 opts["format"] = "best[ext=mp4]/best"
 
-        if self.use_aria2c and utils.aria2c_path():
-            opts["external_downloader"] = "aria2c"
-            opts["external_downloader_args"] = {
-                "aria2c": ["-x", "16", "-s", "16", "-k", "1M", "--console-log-level=warn"]
-            }
-
+        # NOTE: we deliberately do NOT set aria2c as yt-dlp's external downloader.
+        # With an external downloader yt-dlp's progress_hooks stop firing, so the
+        # UI would sit at "Queued" the whole time (this only bit the packaged
+        # build, where aria2c is bundled on PATH). yt-dlp's native downloader
+        # reports smooth progress. aria2c multi-connection is still used by the
+        # generic file engine, where we parse its progress ourselves.
         return opts
 
     def run(self) -> None:
@@ -179,6 +211,11 @@ class DownloadWorker(QRunnable):
         if task.cancel_event.is_set():
             self.signals.canceled.emit(task.id)
             return
+
+        # Reflect "in progress" immediately — extract_info can take a few seconds
+        # before the first progress hook fires.
+        task.status = DOWNLOADING
+        self.signals.progress.emit(task.id)
 
         opts = self._build_opts()
         try:
@@ -300,6 +337,189 @@ def extract_formats(url: str) -> dict:
     }
 
 
+# --- generic file downloader (IDM-style capture) ---------------------------
+
+
+class FileDownloadWorker(QRunnable):
+    """Downloads any direct URL (zip, pdf, exe, media, …).
+
+    Prefers aria2c for multi-connection speed + resume; falls back to a
+    pure-Python resumable downloader. Carries cookies/referrer/user-agent so
+    authenticated/session downloads captured from the browser work.
+    """
+
+    def __init__(self, task: DownloadTask, use_aria2c: bool):
+        super().__init__()
+        self.task = task
+        self.use_aria2c = use_aria2c
+        self.signals = WorkerSignals()
+        self.proc = None
+
+    # -- header helpers
+    def _out_path(self) -> str:
+        import os
+
+        name = self.task.out_name or self.task.title or "download"
+        return os.path.join(self.task.output_dir, name)
+
+    def _emit_progress(self, done: int, total: int, speed_bps: float, eta_s):
+        t = self.task
+        if total:
+            t.progress = max(0.0, min(100.0, done / total * 100))
+            t.total = utils.human_size(total)
+        t.downloaded = utils.human_size(done)
+        t.speed = f"{utils.human_size(speed_bps)}/s" if speed_bps else ""
+        t.eta = f"{int(eta_s)}s" if eta_s else ""
+        t.status = DOWNLOADING
+        self.signals.progress.emit(t.id)
+
+    # -- aria2c path
+    def _run_aria2c(self) -> bool:
+        import os
+        import re
+        import subprocess
+
+        task = self.task
+        out_name = os.path.basename(self._out_path())
+        cmd = [
+            utils.aria2c_path(),
+            "--continue=true",
+            "--max-connection-per-server=16",
+            "--split=16",
+            "--min-split-size=1M",
+            "--summary-interval=1",
+            "--show-console-readout=false",
+            "--console-log-level=warn",
+            "--auto-file-renaming=false",
+            f"--dir={task.output_dir}",
+            f"--out={out_name}",
+        ]
+        if task.cookies:
+            cmd.append(f"--header=Cookie: {task.cookies}")
+        if task.referrer:
+            cmd.append(f"--referer={task.referrer}")
+        if task.user_agent:
+            cmd.append(f"--user-agent={task.user_agent}")
+        cmd.append(task.url)
+
+        creationflags = 0x08000000 if os.name == "nt" else 0  # no console window
+        self.proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1, creationflags=creationflags,
+        )
+
+        prog_re = re.compile(
+            r"\(([\d.]+)%\).*?DL:([\d.]+\s*\w+).*?ETA:(\w+)", re.IGNORECASE)
+        size_re = re.compile(r"([\d.]+\s*\w+)/([\d.]+\s*\w+)\(([\d.]+)%\)")
+        for line in self.proc.stdout:
+            if task.cancel_event.is_set() or task.pause_event.is_set():
+                self.proc.terminate()
+                break
+            sm = size_re.search(line)
+            pm = prog_re.search(line)
+            if sm or pm:
+                t = self.task
+                if sm:
+                    t.downloaded, t.total = sm.group(1), sm.group(2)
+                    t.progress = float(sm.group(3))
+                if pm:
+                    t.progress = float(pm.group(1))
+                    t.speed = pm.group(2) + "/s"
+                    t.eta = pm.group(3)
+                t.status = DOWNLOADING
+                self.signals.progress.emit(t.id)
+        rc = self.proc.wait()
+        return rc == 0 and not task.cancel_event.is_set() and not task.pause_event.is_set()
+
+    # -- pure-python fallback
+    def _run_python(self) -> bool:
+        import os
+        import time
+        import urllib.request
+
+        task = self.task
+        out = self._out_path()
+        part = out + ".part"
+        existing = os.path.getsize(part) if os.path.exists(part) else 0
+
+        headers = {}
+        if task.user_agent:
+            headers["User-Agent"] = task.user_agent
+        else:
+            headers["User-Agent"] = "Mozilla/5.0"
+        if task.referrer:
+            headers["Referer"] = task.referrer
+        if task.cookies:
+            headers["Cookie"] = task.cookies
+        if existing:
+            headers["Range"] = f"bytes={existing}-"
+
+        req = urllib.request.Request(task.url, headers=headers)
+        resp = urllib.request.urlopen(req, timeout=30)
+        # If the server ignored Range, restart from scratch.
+        if existing and resp.status == 200:
+            existing = 0
+        total = int(resp.headers.get("Content-Length", 0) or 0) + existing
+        mode = "ab" if existing else "wb"
+
+        done = existing
+        last_t, last_b = time.time(), done
+        with open(part, mode) as fh:
+            while True:
+                if task.cancel_event.is_set():
+                    return False
+                if task.pause_event.is_set():
+                    return False
+                chunk = resp.read(262144)
+                if not chunk:
+                    break
+                fh.write(chunk)
+                done += len(chunk)
+                now = time.time()
+                if now - last_t >= 0.5:
+                    speed = (done - last_b) / (now - last_t)
+                    eta = (total - done) / speed if speed and total else 0
+                    self._emit_progress(done, total, speed, eta)
+                    last_t, last_b = now, done
+        os.replace(part, out)
+        return True
+
+    def run(self) -> None:
+        task = self.task
+        if task.cancel_event.is_set():
+            self.signals.canceled.emit(task.id)
+            return
+        try:
+            ok = (self._run_aria2c() if (self.use_aria2c and utils.aria2c_path())
+                  else self._run_python())
+            if ok:
+                task.progress = 100.0
+                task.filename = self._out_path()
+                task.status = COMPLETED
+                self.signals.finished.emit(task.id)
+            elif task.cancel_event.is_set():
+                task.status = CANCELED
+                self.signals.canceled.emit(task.id)
+            elif task.pause_event.is_set():
+                task.status = PAUSED
+                self.signals.paused.emit(task.id)
+            else:
+                task.status = ERROR
+                task.error = "Download did not complete."
+                self.signals.error.emit(task.id, task.error)
+        except Exception as exc:  # noqa: BLE001
+            if task.cancel_event.is_set():
+                task.status = CANCELED
+                self.signals.canceled.emit(task.id)
+            elif task.pause_event.is_set():
+                task.status = PAUSED
+                self.signals.paused.emit(task.id)
+            else:
+                task.status = ERROR
+                task.error = str(exc)
+                self.signals.error.emit(task.id, str(exc))
+
+
 # --- manager ---------------------------------------------------------------
 
 
@@ -330,7 +550,10 @@ class DownloadManager(QObject):
         task.error = ""
         self.task_changed.emit(task.id)
 
-        worker = DownloadWorker(task, self.use_aria2c)
+        if task.engine == ENGINE_FILE:
+            worker = FileDownloadWorker(task, self.use_aria2c)
+        else:
+            worker = DownloadWorker(task, self.use_aria2c)
         worker.signals.progress.connect(self.task_changed)
         worker.signals.finished.connect(self.task_changed)
         worker.signals.paused.connect(self.task_changed)

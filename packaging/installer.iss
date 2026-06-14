@@ -7,7 +7,7 @@
 ; vendored ffmpeg/aria2c) with Start-menu and optional desktop shortcuts.
 
 #define AppName "YT Downloader"
-#define AppVersion "0.1.0"
+#define AppVersion "2.0.0"
 #define AppPublisher "YT Downloader"
 #define AppExe "YT Downloader.exe"
 

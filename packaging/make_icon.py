@@ -70,6 +70,13 @@ def main() -> None:
     master.save(Path(__file__).with_name("app_icon_preview.png"), format="PNG")
     print(f"wrote {out}")
 
+    # Chrome extension icons (toolbar + notifications).
+    ext_icons = Path(__file__).resolve().parents[1] / "extension" / "icons"
+    ext_icons.mkdir(parents=True, exist_ok=True)
+    for px_size in (16, 32, 48, 128):
+        render(px_size).save(ext_icons / f"icon{px_size}.png", format="PNG")
+        print(f"wrote {ext_icons / f'icon{px_size}.png'}")
+
 
 if __name__ == "__main__":
     main()

@@ -10,6 +10,11 @@ Endpoints:
     POST /formats    body {"url": "..."}             -> available quality options
     POST /download   body {"url","selector",         -> queue + start immediately
                             "audio_only","title"}
+    POST /capture    body {"url","filename",          -> generic file download
+                            "referrer","cookies",         (IDM-style interception)
+                            "userAgent","mime","size"}
+    POST /stream     body {"url","kind","referrer",    -> sniffed media stream
+                            "cookies","userAgent","title"}  (HLS/DASH/file + headers)
 """
 
 from __future__ import annotations
@@ -27,6 +32,8 @@ from .download_manager import extract_formats
 class IpcBridge(QObject):
     url_received = pyqtSignal(str)
     download_requested = pyqtSignal(dict)
+    capture_requested = pyqtSignal(dict)
+    stream_requested = pyqtSignal(dict)
 
 
 def _make_handler(bridge: IpcBridge):
@@ -104,6 +111,35 @@ def _make_handler(bridge: IpcBridge):
                     "audio_only": bool(data.get("audio_only")),
                     "title": data.get("title") or url,
                     "label": data.get("label") or "",
+                })
+                self._json(200, {"ok": True})
+
+            elif route == "/capture":
+                if not url:
+                    self._json(400, {"ok": False, "error": "missing url"})
+                    return
+                bridge.capture_requested.emit({
+                    "url": url,
+                    "filename": data.get("filename") or "",
+                    "referrer": data.get("referrer") or "",
+                    "cookies": data.get("cookies") or "",
+                    "userAgent": data.get("userAgent") or "",
+                    "mime": data.get("mime") or "",
+                    "size": data.get("size") or 0,
+                })
+                self._json(200, {"ok": True})
+
+            elif route == "/stream":
+                if not url:
+                    self._json(400, {"ok": False, "error": "missing url"})
+                    return
+                bridge.stream_requested.emit({
+                    "url": url,
+                    "kind": data.get("kind") or "",
+                    "referrer": data.get("referrer") or "",
+                    "cookies": data.get("cookies") or "",
+                    "userAgent": data.get("userAgent") or "",
+                    "title": data.get("title") or "",
                 })
                 self._json(200, {"ok": True})
 

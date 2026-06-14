@@ -136,6 +136,46 @@ def open_in_file_manager(path: str) -> None:
         pass
 
 
+# IDM-style download categories. Each download is sorted into a subfolder of
+# the chosen output directory based on its file type.
+CATEGORY_EXTS = {
+    "Documents": {"pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt",
+                  "ods", "odp", "txt", "rtf", "epub", "csv", "md"},
+    "Compressed": {"zip", "rar", "7z", "gz", "tar", "bz2", "xz", "tgz", "iso"},
+    "Music": {"mp3", "wav", "flac", "aac", "ogg", "m4a", "wma", "opus"},
+    "Video": {"mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "3gp",
+              "ts", "mpg", "mpeg"},
+    "Programs": {"exe", "msi", "dmg", "apk", "deb", "rpm", "bat", "msix"},
+}
+
+
+def category_for_ext(ext: str) -> str:
+    """Return the IDM-style category for a file extension (else 'General')."""
+    ext = (ext or "").lstrip(".").lower()
+    for cat, exts in CATEGORY_EXTS.items():
+        if ext in exts:
+            return cat
+    return "General"
+
+
+def category_for_filename(name: str) -> str:
+    import os
+
+    return category_for_ext(os.path.splitext(name or "")[1])
+
+
+def category_dir(base: str, category: str) -> str:
+    """Return base/<category>, creating it on demand."""
+    import os
+
+    d = os.path.join(base, category)
+    try:
+        os.makedirs(d, exist_ok=True)
+    except OSError:
+        return base
+    return d
+
+
 def human_size(num: float | int | None) -> str:
     if not num:
         return ""

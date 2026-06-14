@@ -38,6 +38,7 @@ from .download_manager import (
     CANCELED,
     COMPLETED,
     DOWNLOADING,
+    ENGINE_FILE,
     ERROR,
     PAUSED,
     QUEUED,
@@ -45,6 +46,7 @@ from .download_manager import (
     DownloadTask,
     InfoWorker,
     build_format_options,
+    file_kind,
     quality_label,
 )
 from .history import HistoryStore
@@ -201,7 +203,11 @@ class QueueItemWidget(QFrame):
         self.title.setWordWrap(False)
         self.title.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         top.addWidget(self.title, 1)
-        self.badge = QLabel("MP3" if task.audio_only else "Video")
+        if task.engine == ENGINE_FILE:
+            badge_text = file_kind(task.out_name or task.title)
+        else:
+            badge_text = "MP3" if task.audio_only else "Video"
+        self.badge = QLabel(badge_text)
         self.badge.setStyleSheet(
             "color: #57606a; background: #eef0f2; border-radius: 6px;"
             " padding: 2px 8px; font-size: 11px; font-weight: 600;"
@@ -327,6 +333,7 @@ class MainWindow(QMainWindow):
         self.output_dir = self.settings.value("output_dir", utils.default_download_dir())
         max_conc = int(self.settings.value("max_concurrent", 3))
         use_aria = self.settings.value("use_aria2c", True, type=bool)
+        self.organize = self.settings.value("organize", True, type=bool)
 
         self.manager = DownloadManager(max_concurrent=max_conc, use_aria2c=use_aria)
         self.manager.task_changed.connect(self._on_task_changed)
@@ -361,12 +368,14 @@ class MainWindow(QMainWindow):
         v.addWidget(head)
 
         body = QLabel(
-            "Get a one-click <b>⬇ Download</b> button on every YouTube video:"
+            "Download videos <i>and capture any file</i> (docs, archives, music, "
+            "movies) straight from your browser:"
             "<ol style='margin-left:-18px;'>"
             "<li>Click <b>Open chrome://extensions</b> below.</li>"
             "<li>Turn on <b>Developer mode</b> (top-right).</li>"
             "<li>Click <b>Load unpacked</b> and pick the extension folder.</li>"
             "</ol>"
+            "Then any download in the browser is sent here automatically. "
             "You only need to do this once."
         )
         body.setWordWrap(True)
@@ -444,6 +453,13 @@ class MainWindow(QMainWindow):
         self.chk_aria.setChecked(self.manager.use_aria2c)
         self.chk_aria.toggled.connect(self._on_aria_toggled)
         tb.addWidget(self.chk_aria)
+        self.chk_organize = QCheckBox("Sort into folders")
+        self.chk_organize.setChecked(self.organize)
+        self.chk_organize.setToolTip(
+            "Sort downloads into Video / Music / Documents / Compressed / "
+            "Programs subfolders (like IDM)")
+        self.chk_organize.toggled.connect(self._on_organize_toggled)
+        tb.addWidget(self.chk_organize)
 
         # header
         header = QLabel("YT Downloader")
@@ -581,6 +597,8 @@ class MainWindow(QMainWindow):
         self.bridge = IpcBridge()
         self.bridge.url_received.connect(self._on_ipc_url)
         self.bridge.download_requested.connect(self._on_ipc_download)
+        self.bridge.capture_requested.connect(self._on_ipc_capture)
+        self.bridge.stream_requested.connect(self._on_ipc_stream)
         self.ipc = IpcServer(self.bridge)
         if not self.ipc.start():
             self.statusBar().showMessage(
@@ -609,12 +627,91 @@ class MainWindow(QMainWindow):
             title=title,
             format_selector="bestaudio/best" if audio_only else selector,
             audio_only=audio_only,
-            output_dir=self.output_dir,
+            output_dir=self._dest_dir("Music" if audio_only else "Video"),
             quality_label=label,
         )
         self.manager.add_task(task)
         self._add_row(task)
         self.statusBar().showMessage(f"Added from browser: {title[:60]}")
+
+    def _on_ipc_capture(self, payload: dict):
+        """A browser download was intercepted — download it as a generic file."""
+        import os
+        from urllib.parse import unquote, urlparse
+
+        url = (payload.get("url") or "").strip()
+        if not url:
+            return
+        name = payload.get("filename") or ""
+        if not name:
+            # derive a filename from the URL path
+            name = os.path.basename(unquote(urlparse(url).path)) or "download"
+        name = os.path.basename(name)  # strip any directory components
+
+        task = DownloadTask(
+            url=url,
+            title=name,
+            format_selector="",
+            audio_only=False,
+            output_dir=self._dest_dir(utils.category_for_filename(name)),
+            engine=ENGINE_FILE,
+            out_name=name,
+            referrer=payload.get("referrer", ""),
+            cookies=payload.get("cookies", ""),
+            user_agent=payload.get("userAgent", ""),
+            mime=payload.get("mime", ""),
+            quality_label=file_kind(name),
+        )
+        self.manager.add_task(task)
+        self._add_row(task)
+        self.tabs.setCurrentIndex(0)
+        self.statusBar().showMessage(f"Capturing: {name[:60]}")
+
+    def _on_ipc_stream(self, payload: dict):
+        """A sniffed media stream (HLS/DASH/file) with the browser's headers."""
+        import os
+        from urllib.parse import unquote, urlparse
+
+        url = (payload.get("url") or "").strip()
+        if not url:
+            return
+        kind = (payload.get("kind") or "").lower()
+        referrer = payload.get("referrer", "")
+        cookies = payload.get("cookies", "")
+        ua = payload.get("userAgent", "")
+        title = payload.get("title", "") or os.path.basename(
+            unquote(urlparse(url).path)) or "video"
+
+        is_stream = kind in ("hls", "dash") or url.lower().split("?")[0].endswith(
+            (".m3u8", ".mpd"))
+
+        if is_stream:
+            # HLS/DASH: yt-dlp downloads + merges segments (needs ffmpeg).
+            task = DownloadTask(
+                url=url,
+                title=title,
+                format_selector="bestvideo+bestaudio/best",
+                audio_only=False,
+                output_dir=self._dest_dir("Video"),
+                quality_label="HLS" if kind == "hls" else (
+                    "DASH" if kind == "dash" else "Stream"),
+                referrer=referrer, cookies=cookies, user_agent=ua,
+            )
+        else:
+            # Direct media file with captured headers -> file engine.
+            name = os.path.basename(unquote(urlparse(url).path)) or title
+            task = DownloadTask(
+                url=url, title=name, format_selector="", audio_only=False,
+                output_dir=self._dest_dir(utils.category_for_filename(name)),
+                engine=ENGINE_FILE, out_name=name,
+                referrer=referrer, cookies=cookies, user_agent=ua,
+                quality_label=file_kind(name),
+            )
+
+        self.manager.add_task(task)
+        self._add_row(task)
+        self.tabs.setCurrentIndex(0)
+        self.statusBar().showMessage(f"Downloading stream: {title[:60]}")
 
     # -- fetch / formats
     def _fetch(self):
@@ -671,7 +768,7 @@ class MainWindow(QMainWindow):
             title=self._pending_info.get("title", url),
             format_selector="bestaudio/best" if audio_only else selector,
             audio_only=audio_only,
-            output_dir=self.output_dir,
+            output_dir=self._dest_dir("Music" if audio_only else "Video"),
             quality_label=self.format_combo.currentText(),
         )
         self.manager.add_task(task)
@@ -835,6 +932,17 @@ class MainWindow(QMainWindow):
         self.manager.use_aria2c = checked
         self.settings.setValue("use_aria2c", checked)
         self._report_environment()
+
+    def _on_organize_toggled(self, checked: bool):
+        self.organize = checked
+        self.settings.setValue("organize", checked)
+
+    def _dest_dir(self, category: str) -> str:
+        """Output folder for a download, sorted into a category subfolder when
+        'Sort into folders' is on."""
+        if not self.organize:
+            return self.output_dir
+        return utils.category_dir(self.output_dir, category)
 
     def _update_ytdlp(self):
         self.statusBar().showMessage("Updating yt-dlp…")

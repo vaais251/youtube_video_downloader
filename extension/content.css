@@ -1,9 +1,7 @@
-/* In-player download button */
-#ytdl-download-btn.ytdl-btn {
-  position: absolute;
-  top: 12px;
-  left: 12px;
-  z-index: 1000;
+/* Floating download button shown over any video on the page */
+.ytdl-btn {
+  position: fixed;
+  z-index: 2147483600;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -14,14 +12,11 @@
   border: none;
   border-radius: 8px;
   cursor: pointer;
-  opacity: 0.55;
+  opacity: 0.7;
   transition: opacity 0.15s ease, background 0.15s ease;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
 }
-.html5-video-player:hover #ytdl-download-btn.ytdl-btn {
-  opacity: 1;
-}
-#ytdl-download-btn.ytdl-btn:hover {
+.ytdl-btn:hover {
   background: #d32f2f;
   opacity: 1;
 }

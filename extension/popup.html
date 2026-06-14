@@ -57,6 +57,21 @@
       .ok { color: #1e8449; }
       .err { color: var(--accent); }
       .muted { color: #888; }
+      .capture-row {
+        margin-top: 14px;
+        padding-top: 12px;
+        border-top: 1px solid #eee;
+      }
+      .switch {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .switch input { width: 16px; height: 16px; accent-color: var(--accent); }
+      .hint { font-size: 11px; color: #999; margin-top: 4px; }
     </style>
   </head>
   <body>
@@ -71,6 +86,14 @@
 
     <button id="download" disabled>Download</button>
     <div id="status"></div>
+
+    <div class="capture-row">
+      <label class="switch">
+        <input type="checkbox" id="capture" />
+        <span>Capture browser downloads</span>
+      </label>
+      <div class="hint">Sends files you download (zip, pdf, music, movies…) to the app.</div>
+    </div>
 
     <script src="popup.js"></script>
   </body>

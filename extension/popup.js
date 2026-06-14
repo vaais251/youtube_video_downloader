@@ -92,6 +92,15 @@ async function startDownload() {
 
 btn.addEventListener("click", startDownload);
 
+// --- capture toggle ---
+const captureEl = document.getElementById("capture");
+chrome.runtime.sendMessage({ type: "getSettings" }, (res) => {
+  if (res && res.ok) captureEl.checked = !!res.captureEnabled;
+});
+captureEl.addEventListener("change", () => {
+  chrome.runtime.sendMessage({ type: "setCapture", value: captureEl.checked });
+});
+
 (async () => {
   const tab = await getActiveTab();
   currentUrl = (tab && tab.url) || "";
