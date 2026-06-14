@@ -7,3 +7,9 @@ dist/
 build/
 *.egg-info/
 .uv/
+
+# packaging build artifacts
+packaging/build/
+packaging/dist_installer/
+packaging/vendor/
+*.spec.bak

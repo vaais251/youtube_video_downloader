@@ -5,12 +5,13 @@ from __future__ import annotations
 import subprocess
 import sys
 
-from PyQt6.QtCore import QObject, QRunnable, Qt, QThreadPool, QSettings, pyqtSignal
+from PyQt6.QtCore import QObject, QRunnable, Qt, QThreadPool, QSettings, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -339,6 +340,77 @@ class MainWindow(QMainWindow):
         self._start_ipc()
         self._report_environment()
 
+        # Show the extension onboarding once, shortly after the window appears.
+        if not self.settings.value("onboarded", False, type=bool):
+            QTimer.singleShot(400, self._show_onboarding)
+
+    # -- onboarding (first run)
+    def _show_onboarding(self):
+        self.settings.setValue("onboarded", True)
+        ext_dir = utils.extension_dir()
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Enable the browser extension")
+        dlg.setMinimumWidth(460)
+        v = QVBoxLayout(dlg)
+        v.setContentsMargins(20, 18, 20, 16)
+        v.setSpacing(12)
+
+        head = QLabel("Add the YT Downloader button to your browser")
+        head.setObjectName("h1")
+        v.addWidget(head)
+
+        body = QLabel(
+            "Get a one-click <b>⬇ Download</b> button on every YouTube video:"
+            "<ol style='margin-left:-18px;'>"
+            "<li>Click <b>Open chrome://extensions</b> below.</li>"
+            "<li>Turn on <b>Developer mode</b> (top-right).</li>"
+            "<li>Click <b>Load unpacked</b> and pick the extension folder.</li>"
+            "</ol>"
+            "You only need to do this once."
+        )
+        body.setWordWrap(True)
+        body.setTextFormat(Qt.TextFormat.RichText)
+        v.addWidget(body)
+
+        row = QHBoxLayout()
+        btn_ext = QPushButton("Open chrome://extensions")
+        btn_ext.setObjectName("primary")
+        btn_ext.clicked.connect(lambda: self._open_extensions_page())
+        row.addWidget(btn_ext)
+
+        btn_folder = QPushButton("Open extension folder")
+        btn_folder.setEnabled(bool(ext_dir))
+        btn_folder.clicked.connect(
+            lambda: utils.open_in_file_manager(ext_dir) if ext_dir else None)
+        row.addWidget(btn_folder)
+        v.addLayout(row)
+
+        close_row = QHBoxLayout()
+        close_row.addStretch(1)
+        btn_done = QPushButton("Done")
+        btn_done.clicked.connect(dlg.accept)
+        close_row.addWidget(btn_done)
+        v.addLayout(close_row)
+
+        dlg.exec()
+
+    def _open_extensions_page(self):
+        import subprocess
+
+        browser = utils.find_chromium_browser()
+        if browser:
+            try:
+                subprocess.Popen([browser, "chrome://extensions"])
+                return
+            except OSError:
+                pass
+        QMessageBox.information(
+            self, "Open extensions page",
+            "Couldn't launch a Chromium browser automatically.\n\n"
+            "Open your browser and go to:  chrome://extensions",
+        )
+
     # -- UI construction
     def _build_ui(self):
         central = QWidget()
@@ -353,6 +425,9 @@ class MainWindow(QMainWindow):
         act_update = QAction("⟳  Update yt-dlp", self)
         act_update.triggered.connect(self._update_ytdlp)
         tb.addAction(act_update)
+        act_ext = QAction("🧩  Extension", self)
+        act_ext.triggered.connect(self._show_onboarding)
+        tb.addAction(act_ext)
         tb.addSeparator()
         lbl_conc = QLabel("  Concurrent ")
         lbl_conc.setStyleSheet("color: #57606a;")

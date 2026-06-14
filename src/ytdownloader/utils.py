@@ -13,6 +13,77 @@ IPC_HOST = "127.0.0.1"
 IPC_PORT = 8765
 
 
+def _base_dirs() -> list[Path]:
+    """Directories to search for bundled resources (bin/, extension/).
+
+    Covers a PyInstaller build (frozen) and a normal source checkout.
+    """
+    dirs: list[Path] = []
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            dirs.append(Path(meipass))          # onefile temp / onedir root
+        dirs.append(Path(sys.executable).parent)  # the install directory
+    else:
+        # src/ytdownloader/utils.py -> project root is two parents up
+        dirs.append(Path(__file__).resolve().parents[2])
+    return dirs
+
+
+def add_bundled_tools_to_path() -> None:
+    """Prepend any bundled ``bin/`` folder (ffmpeg, aria2c) to PATH.
+
+    After this runs, the normal ``shutil.which`` detection finds the bundled
+    binaries automatically, so the rest of the app needs no changes.
+    """
+    for base in _base_dirs():
+        bin_dir = base / "bin"
+        if bin_dir.is_dir():
+            os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ.get("PATH", "")
+
+
+def extension_dir() -> str | None:
+    """Locate the bundled Chrome extension folder, if present."""
+    for base in _base_dirs():
+        ext = base / "extension"
+        if (ext / "manifest.json").exists():
+            return str(ext)
+    return None
+
+
+def app_icon_path() -> str | None:
+    """Locate app.ico (bundled at the root when frozen, else packaging/)."""
+    for base in _base_dirs():
+        for cand in (base / "app.ico", base / "packaging" / "app.ico"):
+            if cand.exists():
+                return str(cand)
+    return None
+
+
+def find_chromium_browser() -> str | None:
+    """Find a Chromium-based browser (Chrome, then Edge, then Brave) on Windows.
+
+    Used to open ``chrome://extensions`` directly, which a normal
+    ``webbrowser.open`` cannot do for the ``chrome://`` scheme.
+    """
+    if not sys.platform.startswith("win"):
+        return shutil.which("google-chrome") or shutil.which("chromium")
+
+    candidates = [
+        r"%ProgramFiles%\Google\Chrome\Application\chrome.exe",
+        r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe",
+        r"%LocalAppData%\Google\Chrome\Application\chrome.exe",
+        r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe",
+        r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe",
+        r"%ProgramFiles%\BraveSoftware\Brave-Browser\Application\brave.exe",
+    ]
+    for c in candidates:
+        p = Path(os.path.expandvars(c))
+        if p.exists():
+            return str(p)
+    return None
+
+
 def find_executable(name: str) -> str | None:
     """Return the full path to ``name`` if it is on PATH, else None.
 
