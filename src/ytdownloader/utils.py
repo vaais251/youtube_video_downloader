@@ -176,6 +176,51 @@ def category_dir(base: str, category: str) -> str:
     return d
 
 
+_STARTUP_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+_STARTUP_NAME = "YT Downloader"
+
+
+def _startup_command() -> str:
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}"'
+    # dev: launch the module with the windowed interpreter if available
+    py = sys.executable.replace("python.exe", "pythonw.exe")
+    return f'"{py}" -m ytdownloader'
+
+
+def is_run_on_startup() -> bool:
+    if not sys.platform.startswith("win"):
+        return False
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _STARTUP_KEY) as key:
+            winreg.QueryValueEx(key, _STARTUP_NAME)
+        return True
+    except OSError:
+        return False
+
+
+def set_run_on_startup(enabled: bool) -> None:
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _STARTUP_KEY, 0,
+                            winreg.KEY_SET_VALUE) as key:
+            if enabled:
+                winreg.SetValueEx(key, _STARTUP_NAME, 0, winreg.REG_SZ,
+                                  _startup_command())
+            else:
+                try:
+                    winreg.DeleteValue(key, _STARTUP_NAME)
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+
 def human_size(num: float | int | None) -> str:
     if not num:
         return ""

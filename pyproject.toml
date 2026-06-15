@@ -1,6 +1,6 @@
 [project]
 name = "yt-downloader"
-version = "2.0.0"
+version = "2.1.0"
 description = "IDM-style desktop download manager — videos and any file (PyQt6 + yt-dlp + aria2c)"
 readme = "README.md"
 requires-python = ">=3.10"

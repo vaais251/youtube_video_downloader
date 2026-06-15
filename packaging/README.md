@@ -71,5 +71,21 @@ it automatically (the spec/iss check for its presence).
 ## Code signing (optional but recommended)
 
 Unsigned installers trigger SmartScreen warnings. If you have a code-signing
-certificate, sign both `dist\YT Downloader\YT Downloader.exe` and the final
-`YT-Downloader-Setup.exe` with `signtool`.
+`.pfx` certificate, pass it to the build script and both the app exe and the
+installer are signed automatically (needs `signtool.exe` from the Windows SDK):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging\build.ps1 `
+  -CertPath C:\path\to\cert.pfx -CertPassword "yourpassword"
+```
+
+Without a certificate, users click **More info -> Run anyway** on the
+SmartScreen prompt — normal for indie apps.
+
+## One-click install for others (Chrome Web Store)
+
+Loading the extension unpacked requires Developer mode. To give users a true
+one-click install (and stop Chrome from periodically nagging/disabling
+dev-mode extensions), publish `extension/` to the Chrome Web Store
+(one-time $5 developer registration). Zip the `extension/` folder and upload it
+at the [Chrome Developer Dashboard](https://chrome.google.com/webstore/devconsole).

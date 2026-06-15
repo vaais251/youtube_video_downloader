@@ -124,6 +124,7 @@ def _make_handler(bridge: IpcBridge):
                     "referrer": data.get("referrer") or "",
                     "cookies": data.get("cookies") or "",
                     "userAgent": data.get("userAgent") or "",
+                    "origin": data.get("origin") or "",
                     "mime": data.get("mime") or "",
                     "size": data.get("size") or 0,
                 })
@@ -139,6 +140,7 @@ def _make_handler(bridge: IpcBridge):
                     "referrer": data.get("referrer") or "",
                     "cookies": data.get("cookies") or "",
                     "userAgent": data.get("userAgent") or "",
+                    "origin": data.get("origin") or "",
                     "title": data.get("title") or "",
                 })
                 self._json(200, {"ok": True})

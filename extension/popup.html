@@ -72,6 +72,22 @@
       }
       .switch input { width: 16px; height: 16px; accent-color: var(--accent); }
       .hint { font-size: 11px; color: #999; margin-top: 4px; }
+      #grablist { margin-top: 8px; max-height: 220px; overflow-y: auto; }
+      .grab-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        padding: 4px 2px;
+        border-bottom: 1px solid #f0f0f0;
+      }
+      .grab-item span {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      #grabdl { margin-top: 8px; background: #1e8449; }
+      #grabdl:hover { background: #196f3d; }
     </style>
   </head>
   <body>
@@ -86,6 +102,9 @@
 
     <button id="download" disabled>Download</button>
     <div id="status"></div>
+
+    <button id="grab" style="margin-top:8px;background:#374151;">⤓ Grab links on this page</button>
+    <div id="grablist"></div>
 
     <div class="capture-row">
       <label class="switch">

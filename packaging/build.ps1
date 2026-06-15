@@ -18,8 +18,21 @@
 #>
 param(
   [switch]$SkipTools,
-  [switch]$SkipInstaller
+  [switch]$SkipInstaller,
+  [string]$CertPath,        # optional .pfx code-signing certificate
+  [string]$CertPassword     # password for the .pfx
 )
+
+function Sign($file) {
+  if (-not $CertPath) { return }
+  $st = Get-Command signtool.exe -ErrorAction SilentlyContinue
+  if (-not $st) {
+    Write-Warning "signtool.exe not found (install the Windows SDK) - skipping signing."
+    return
+  }
+  & $st.Source sign /f $CertPath /p $CertPassword /fd SHA256 `
+    /tr http://timestamp.digicert.com /td SHA256 $file
+}
 
 $ErrorActionPreference = "Stop"
 # CRITICAL: Invoke-WebRequest is 10-100x slower while it renders a progress bar
@@ -82,6 +95,7 @@ if (-not (Test-Path (Join-Path $appDir "YT Downloader.exe"))) {
   throw "PyInstaller build did not produce the expected exe."
 }
 Write-Host "  built: $appDir" -ForegroundColor Green
+Sign (Join-Path $appDir "YT Downloader.exe")
 
 # --- 3. Inno Setup installer --------------------------------------------------
 if ($SkipInstaller) {
@@ -111,5 +125,6 @@ if (-not $iscc) {
 & $iscc (Join-Path $pkg "installer.iss")
 $setup = Join-Path $pkg "dist_installer\YT-Downloader-Setup.exe"
 if (Test-Path $setup) {
+  Sign $setup
   Write-Host "`nDONE. Installer: $setup" -ForegroundColor Green
 }

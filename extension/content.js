@@ -200,6 +200,7 @@ async function openPanel(url, anchor) {
         referrer: o.headers.referer || location.href,
         cookies: o.headers.cookie || "",
         userAgent: o.headers.userAgent || navigator.userAgent,
+        origin: o.headers.origin || "",
         title: titleEl.textContent || document.title || o.url,
       });
     } else {
@@ -237,6 +238,39 @@ document.addEventListener(
 );
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closePanel();
+});
+
+// Collect downloadable links + media on the page (for the popup's "Grab" tool).
+const DOWNLOADABLE_RE =
+  /\.(zip|rar|7z|gz|tar|bz2|xz|iso|exe|msi|dmg|apk|deb|rpm|pdf|docx?|xlsx?|pptx?|odt|ods|epub|csv|txt|mp3|wav|flac|aac|ogg|m4a|mp4|mkv|avi|mov|wmv|flv|webm|m4v)(\?|#|$)/i;
+
+function collectLinks() {
+  const seen = new Set();
+  const links = [];
+  const add = (url, kind) => {
+    if (!url || !/^https?:\/\//i.test(url) || seen.has(url)) return;
+    seen.add(url);
+    let name = "";
+    try {
+      name = decodeURIComponent(new URL(url).pathname.split("/").pop() || "");
+    } catch (_) {
+      /* ignore */
+    }
+    links.push({ url, kind, label: name || url });
+  };
+  document.querySelectorAll("a[href]").forEach((a) => {
+    if (DOWNLOADABLE_RE.test(a.href)) add(a.href, "file");
+  });
+  document.querySelectorAll("video, audio, source").forEach((el) => {
+    add(el.currentSrc || el.src, "file");
+  });
+  return links;
+}
+
+chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
+  if (msg && msg.type === "collectLinks") {
+    sendResponse({ ok: true, links: collectLinks() });
+  }
 });
 
 window.addEventListener("scroll", refreshButtons, { passive: true });

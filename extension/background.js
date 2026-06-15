@@ -79,13 +79,13 @@ async function download(url, { selector = "bestvideo+bestaudio/best",
 
 // Stream download: hand a sniffed media URL (+ its captured headers) to the app.
 async function streamDownload({ url, kind = "", referrer = "", cookies = "",
-                              userAgent = "", title = "" }) {
+                              userAgent = "", origin = "", title = "" }) {
   if (!url) return { ok: false, error: "no url" };
   try {
     const res = await fetch(`${BASE}/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, kind, referrer, cookies, userAgent, title }),
+      body: JSON.stringify({ url, kind, referrer, cookies, userAgent, origin, title }),
     });
     const data = await res.json().catch(() => ({}));
     return { ok: res.ok && data.ok !== false, error: data.error };
@@ -94,23 +94,28 @@ async function streamDownload({ url, kind = "", referrer = "", cookies = "",
   }
 }
 
-// Generic file capture: hand a direct file URL (+ cookies) to the app.
-async function capture({ url, filename = "", referrer = "", mime = "", size = 0 }) {
+// Generic file capture: hand a direct file URL (+ headers) to the app. Passing
+// the right Referer/Cookie/User-Agent is what makes hotlink-protected CDNs
+// (which otherwise return 403) work — exactly like IDM.
+async function capture({ url, filename = "", referrer = "", cookies = null,
+                        userAgent = "", origin = "", mime = "", size = 0 }) {
   if (!url) return { ok: false, error: "no url" };
-  let cookies = "";
-  try {
-    const cks = await chrome.cookies.getAll({ url });
-    cookies = cks.map((c) => `${c.name}=${c.value}`).join("; ");
-  } catch (_) {
-    /* cookies optional */
+  if (cookies == null) {
+    cookies = "";
+    try {
+      const cks = await chrome.cookies.getAll({ url });
+      cookies = cks.map((c) => `${c.name}=${c.value}`).join("; ");
+    } catch (_) {
+      /* cookies optional */
+    }
   }
   try {
     const res = await fetch(`${BASE}/capture`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        url, filename, referrer, cookies,
-        userAgent: navigator.userAgent, mime, size,
+        url, filename, referrer, cookies, origin,
+        userAgent: userAgent || navigator.userAgent, mime, size,
       }),
     });
     const data = await res.json().catch(() => ({}));
@@ -118,6 +123,24 @@ async function capture({ url, filename = "", referrer = "", mime = "", size = 0 
   } catch (e) {
     return { ok: false, error: String(e) };
   }
+}
+
+function _host(u) {
+  try { return new URL(u).host; } catch { return ""; }
+}
+
+// Headers the sniffer captured for a URL: exact match first, then any media on
+// the same host (Referer/Origin are page-level, so a same-host match is valid).
+function findSniffedHeaders(url) {
+  const host = _host(url);
+  let sameHost = null;
+  for (const list of tabMedia.values()) {
+    for (const c of list) {
+      if (c.url === url) return c.headers || {};
+      if (!sameHost && host && _host(c.url) === host) sameHost = c.headers || {};
+    }
+  }
+  return sameHost;
 }
 
 // --- download interception (the IDM behaviour) -----------------------------
@@ -144,10 +167,27 @@ chrome.downloads.onCreated.addListener(async (item) => {
 
     const url = item.finalUrl || item.url;
     const filename = item.filename ? item.filename.split(/[\\/]/).pop() : "";
+
+    // Use the exact headers the sniffer saw for this URL (Referer is what most
+    // 403-on-direct-download CDNs require). Fall back to the active tab's URL.
+    const sniff = findSniffedHeaders(url) || {};
+    let referrer = item.referrer || sniff.referer || "";
+    if (!referrer) {
+      try {
+        const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
+        referrer = (t && t.url) || "";
+      } catch (_) {
+        /* ignore */
+      }
+    }
+
     const r = await capture({
       url,
       filename,
-      referrer: item.referrer || "",
+      referrer,
+      cookies: sniff.cookie || null, // null -> capture() reads cookies itself
+      userAgent: sniff.userAgent || "",
+      origin: sniff.origin || "",
       mime: item.mime || "",
       size: item.fileSize && item.fileSize > 0 ? item.fileSize : 0,
     });
@@ -262,7 +302,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       referrer: msg.referrer,
       cookies: msg.cookies,
       userAgent: msg.userAgent,
+      origin: msg.origin,
       title: msg.title,
+    }).then(sendResponse);
+  } else if (msg.type === "capture") {
+    capture({
+      url: msg.url,
+      filename: msg.filename || "",
+      referrer: msg.referrer || "",
     }).then(sendResponse);
   } else if (msg.type === "getSettings") {
     loadSettings().then(() => sendResponse({ ok: true, ...settings }));

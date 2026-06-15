@@ -1,19 +1,23 @@
-# YT Downloader 2.0
+# YT Downloader 2.1
 
 A clean, IDM-style desktop **download manager** — videos *and any file*.
 
 - **General downloads:** the browser extension intercepts downloads of any type
   (zip, exe, pdf, music, movies, …) and downloads them through the app — just
   like IDM. Cookies/referrer are passed so authenticated downloads work.
-- **GUI:** PyQt6
+- **Media sniffing:** detects HLS/DASH streams on any site and downloads them
+  with the browser's real headers.
+- **GUI:** PyQt6, light **and dark** themes.
 - **Media engine:** [yt-dlp](https://github.com/yt-dlp/yt-dlp) (bundled, one-click updatable)
 - **File engine:** aria2c multi-connection (with a pure-Python resumable fallback)
 - **Merging / MP3:** ffmpeg
-- **Queue:** pause / resume / cancel / retry, per-item progress bars
-- **Categories:** auto-sorts downloads into **Video / Music / Documents /
-  Compressed / Programs** subfolders (like IDM); toggle with *Sort into folders*
-- **History:** persistent, IDM-style download history you can clear or prune
-- **Browser integration:** in-player YouTube button + download capture toggle
+- **Queue:** pause / resume / cancel / retry, per-item progress bars, and it now
+  **persists across restarts** (optional auto-resume)
+- **Categories:** auto-sorts into **Video / Music / Documents / Compressed / Programs**
+- **History:** persistent, deletable download history
+- **System tray:** close-to-tray, start-with-Windows, pause/resume all
+- **Extras:** speed limit, duplicate detection, filename-collision handling,
+  clipboard link watching, and a popup **"Grab links on this page"** batch tool
 
 ## Features
 

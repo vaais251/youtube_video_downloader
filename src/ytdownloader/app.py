@@ -6,13 +6,15 @@ import subprocess
 import sys
 
 from PyQt6.QtCore import QObject, QRunnable, Qt, QThreadPool, QSettings, QTimer, pyqtSignal
-from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDialog,
+    QDialogButtonBox,
     QFileDialog,
+    QFormLayout,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -25,6 +27,8 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QStyle,
+    QSystemTrayIcon,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -48,83 +52,111 @@ from .download_manager import (
     build_format_options,
     file_kind,
     quality_label,
+    task_from_dict,
+    task_to_dict,
 )
 from .history import HistoryStore
 from .ipc_server import IpcBridge, IpcServer
+from .queue_store import QueueStore
 
 
 # --- visual theme ----------------------------------------------------------
 
-STYLE = """
+_PALETTES = {
+    "light": {
+        "bg": "#f4f5f7", "panel": "#ffffff", "text": "#1f2328", "muted": "#57606a",
+        "border": "#e3e6ea", "border2": "#d0d7de", "accent": "#e53935",
+        "accent_hover": "#d32f2f", "accent_press": "#b71c1c", "accent_dis": "#f1a9a7",
+        "input": "#ffffff", "ro": "#eef0f2", "hover": "#f0f1f3", "press": "#e6e8eb",
+        "track": "#e6e8eb", "scroll": "#c4c9cf", "scroll_h": "#aab0b7",
+        "header": "#f7f8fa", "disabled": "#9aa0a6", "sel": "#fdecea",
+    },
+    "dark": {
+        "bg": "#1e1f22", "panel": "#2a2c30", "text": "#e7e8ea", "muted": "#9aa0a6",
+        "border": "#3a3d42", "border2": "#45494f", "accent": "#e53935",
+        "accent_hover": "#f0524e", "accent_press": "#c62828", "accent_dis": "#7a3b39",
+        "input": "#34373c", "ro": "#34373c", "hover": "#3a3d42", "press": "#42464c",
+        "track": "#3a3d42", "scroll": "#4a4e54", "scroll_h": "#5a5f66",
+        "header": "#313338", "disabled": "#6b7178", "sel": "#4a2e2d",
+    },
+}
+
+_STYLE_TEMPLATE = """
 * { font-family: 'Segoe UI', system-ui, sans-serif; }
-QMainWindow, QWidget { background: #f4f5f7; color: #1f2328; font-size: 13px; }
+QMainWindow, QWidget, QDialog { background: %(bg)s; color: %(text)s; font-size: 13px; }
 
-QToolBar { background: #ffffff; border: none; border-bottom: 1px solid #e3e6ea;
+QToolBar { background: %(panel)s; border: none; border-bottom: 1px solid %(border)s;
            spacing: 8px; padding: 6px 10px; }
-QToolBar QToolButton { padding: 6px 12px; border-radius: 8px; }
-QToolBar QToolButton:hover { background: #f0f1f3; }
+QToolBar QToolButton { padding: 6px 12px; border-radius: 8px; color: %(text)s; }
+QToolBar QToolButton:hover { background: %(hover)s; }
 
-QLineEdit { background: #ffffff; border: 1px solid #d0d7de; border-radius: 9px;
-            padding: 9px 12px; selection-background-color: #e53935; }
-QLineEdit:focus { border: 1px solid #e53935; }
-QLineEdit:read-only { background: #eef0f2; color: #4a4f55; }
+QLineEdit { background: %(input)s; border: 1px solid %(border2)s; border-radius: 9px;
+            padding: 9px 12px; color: %(text)s; selection-background-color: %(accent)s; }
+QLineEdit:focus { border: 1px solid %(accent)s; }
+QLineEdit:read-only { background: %(ro)s; color: %(muted)s; }
 
-QComboBox { background: #ffffff; border: 1px solid #d0d7de; border-radius: 9px;
-            padding: 8px 12px; }
-QComboBox:focus { border: 1px solid #e53935; }
+QComboBox { background: %(input)s; border: 1px solid %(border2)s; border-radius: 9px;
+            padding: 8px 12px; color: %(text)s; }
+QComboBox:focus { border: 1px solid %(accent)s; }
 QComboBox::drop-down { border: none; width: 26px; }
-QComboBox QAbstractItemView { background: #ffffff; border: 1px solid #d0d7de;
-            selection-background-color: #e53935; selection-color: #ffffff;
-            outline: none; }
+QComboBox QAbstractItemView { background: %(panel)s; color: %(text)s;
+            border: 1px solid %(border2)s; selection-background-color: %(accent)s;
+            selection-color: #ffffff; outline: none; }
 
-QPushButton { background: #ffffff; border: 1px solid #d0d7de; border-radius: 9px;
-              padding: 8px 16px; }
-QPushButton:hover { background: #f0f1f3; }
-QPushButton:pressed { background: #e6e8eb; }
-QPushButton:disabled { color: #9aa0a6; background: #f4f5f7; }
+QPushButton { background: %(panel)s; border: 1px solid %(border2)s; border-radius: 9px;
+              padding: 8px 16px; color: %(text)s; }
+QPushButton:hover { background: %(hover)s; }
+QPushButton:pressed { background: %(press)s; }
+QPushButton:disabled { color: %(disabled)s; background: %(bg)s; }
 
-QPushButton#primary { background: #e53935; color: #ffffff; border: none;
+QPushButton#primary { background: %(accent)s; color: #ffffff; border: none;
                       font-weight: 600; }
-QPushButton#primary:hover { background: #d32f2f; }
-QPushButton#primary:pressed { background: #b71c1c; }
-QPushButton#primary:disabled { background: #f1a9a7; color: #ffffff; }
+QPushButton#primary:hover { background: %(accent_hover)s; }
+QPushButton#primary:pressed { background: %(accent_press)s; }
+QPushButton#primary:disabled { background: %(accent_dis)s; color: #ffffff; }
 
 QPushButton#ghost { border: none; background: transparent; padding: 6px 10px;
-                    color: #57606a; }
-QPushButton#ghost:hover { background: #eef0f2; color: #1f2328; }
+                    color: %(muted)s; }
+QPushButton#ghost:hover { background: %(hover)s; color: %(text)s; }
 
-QProgressBar { border: none; background: #e6e8eb; border-radius: 5px;
+QProgressBar { border: none; background: %(track)s; border-radius: 5px;
                min-height: 8px; max-height: 8px; text-align: center; }
-QProgressBar::chunk { background: #e53935; border-radius: 5px; }
+QProgressBar::chunk { background: %(accent)s; border-radius: 5px; }
 
-QFrame#queueItem { background: #ffffff; border: 1px solid #e7eaee;
+QFrame#queueItem { background: %(panel)s; border: 1px solid %(border)s;
                    border-radius: 14px; }
+QLabel#badge { color: %(muted)s; background: %(ro)s; border-radius: 6px;
+               padding: 2px 8px; font-size: 11px; font-weight: 600; }
 QScrollArea { border: none; background: transparent; }
 QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
-QScrollBar::handle:vertical { background: #c4c9cf; border-radius: 5px; min-height: 28px; }
-QScrollBar::handle:vertical:hover { background: #aab0b7; }
+QScrollBar::handle:vertical { background: %(scroll)s; border-radius: 5px; min-height: 28px; }
+QScrollBar::handle:vertical:hover { background: %(scroll_h)s; }
 QScrollBar::add-line, QScrollBar::sub-line { height: 0; }
 
-QSpinBox { background: #ffffff; border: 1px solid #d0d7de; border-radius: 8px;
-           padding: 4px 6px; }
-QCheckBox { spacing: 6px; }
-QStatusBar { background: #ffffff; border-top: 1px solid #e3e6ea; color: #57606a; }
-QLabel#h1 { font-size: 15px; font-weight: 700; }
-QLabel#section { font-size: 13px; font-weight: 600; color: #3a4047; }
+QSpinBox { background: %(input)s; border: 1px solid %(border2)s; border-radius: 8px;
+           padding: 4px 6px; color: %(text)s; }
+QCheckBox { spacing: 6px; color: %(text)s; }
+QStatusBar { background: %(panel)s; border-top: 1px solid %(border)s; color: %(muted)s; }
+QLabel#h1 { font-size: 15px; font-weight: 700; color: %(text)s; }
+QLabel#section { font-size: 13px; font-weight: 600; color: %(muted)s; }
 
 QTabWidget::pane { border: none; top: -1px; }
-QTabBar::tab { background: transparent; color: #57606a; padding: 8px 16px;
+QTabBar::tab { background: transparent; color: %(muted)s; padding: 8px 16px;
                border: none; border-bottom: 2px solid transparent; font-weight: 600; }
-QTabBar::tab:selected { color: #e53935; border-bottom: 2px solid #e53935; }
-QTabBar::tab:hover:!selected { color: #1f2328; }
+QTabBar::tab:selected { color: %(accent)s; border-bottom: 2px solid %(accent)s; }
+QTabBar::tab:hover:!selected { color: %(text)s; }
 
-QTableWidget { background: #ffffff; border: 1px solid #e7eaee; border-radius: 12px;
-               gridline-color: #eef0f2; outline: none; }
+QTableWidget { background: %(panel)s; border: 1px solid %(border)s; border-radius: 12px;
+               gridline-color: %(border)s; outline: none; color: %(text)s; }
 QTableWidget::item { padding: 6px 8px; }
-QTableWidget::item:selected { background: #fdecea; color: #1f2328; }
-QHeaderView::section { background: #f7f8fa; color: #57606a; border: none;
-                       border-bottom: 1px solid #e7eaee; padding: 8px; font-weight: 600; }
+QTableWidget::item:selected { background: %(sel)s; color: %(text)s; }
+QHeaderView::section { background: %(header)s; color: %(muted)s; border: none;
+                       border-bottom: 1px solid %(border)s; padding: 8px; font-weight: 600; }
 """
+
+
+def build_style(theme: str = "light") -> str:
+    return _STYLE_TEMPLATE % _PALETTES.get(theme, _PALETTES["light"])
 
 
 def _selector_for_label(label: str) -> str:
@@ -208,10 +240,7 @@ class QueueItemWidget(QFrame):
         else:
             badge_text = "MP3" if task.audio_only else "Video"
         self.badge = QLabel(badge_text)
-        self.badge.setStyleSheet(
-            "color: #57606a; background: #eef0f2; border-radius: 6px;"
-            " padding: 2px 8px; font-size: 11px; font-weight: 600;"
-        )
+        self.badge.setObjectName("badge")
         top.addWidget(self.badge, 0, Qt.AlignmentFlag.AlignTop)
         layout.addLayout(top)
 
@@ -223,7 +252,7 @@ class QueueItemWidget(QFrame):
         bottom = QHBoxLayout()
         bottom.setSpacing(6)
         self.status = QLabel()
-        self.status.setStyleSheet("color: #57606a; font-size: 12px;")
+        self.status.setStyleSheet("color: #8a9099; font-size: 12px;")
         bottom.addWidget(self.status, 1)
 
         self.btn_toggle = QPushButton("Pause")
@@ -276,7 +305,7 @@ class QueueItemWidget(QFrame):
         t = self.task
         self.bar.setValue(int(t.progress))
         self.title.setText(t.title or t.url)
-        self.status.setStyleSheet("color: #57606a; font-size: 12px;")
+        self.status.setStyleSheet("color: #8a9099; font-size: 12px;")
         pct = f"{int(t.progress)}%"
 
         if t.status == DOWNLOADING:
@@ -327,25 +356,37 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("YT Downloader")
         self.resize(860, 680)
         self.setMinimumSize(640, 480)
-        self.setStyleSheet(STYLE)
 
         self.settings = QSettings("ytdownloader", "YTDownloader")
         self.output_dir = self.settings.value("output_dir", utils.default_download_dir())
         max_conc = int(self.settings.value("max_concurrent", 3))
         use_aria = self.settings.value("use_aria2c", True, type=bool)
         self.organize = self.settings.value("organize", True, type=bool)
+        self.theme = self.settings.value("theme", "light")
+        speed = int(self.settings.value("speed_limit", 0))
+        self.close_to_tray = self.settings.value("close_to_tray", True, type=bool)
+        self.auto_resume = self.settings.value("auto_resume", False, type=bool)
 
-        self.manager = DownloadManager(max_concurrent=max_conc, use_aria2c=use_aria)
+        self.setStyleSheet(build_style(self.theme))
+
+        self.manager = DownloadManager(max_concurrent=max_conc, use_aria2c=use_aria,
+                                       speed_limit_kbps=speed)
         self.manager.task_changed.connect(self._on_task_changed)
         self.rows: dict[str, QueueItemWidget] = {}
         self._pending_info = None  # cached info dict after a fetch
 
         self.history = HistoryStore()
+        self.queue_store = QueueStore()
         self._recorded: set[str] = set()  # task ids already written to history
+        self._quitting = False
+        self._last_clip = ""
 
         self._build_ui()
+        self._build_tray()
         self._start_ipc()
         self._report_environment()
+        self._restore_queue()
+        self._start_clipboard_watch()
 
         # Show the extension onboarding once, shortly after the window appears.
         if not self.settings.value("onboarded", False, type=bool):
@@ -431,35 +472,22 @@ class MainWindow(QMainWindow):
         # toolbar
         tb = self.addToolBar("Main")
         tb.setMovable(False)
+        act_resume = QAction("▶  Resume all", self)
+        act_resume.triggered.connect(self.manager.resume_all)
+        tb.addAction(act_resume)
+        act_pause = QAction("⏸  Pause all", self)
+        act_pause.triggered.connect(self.manager.pause_all)
+        tb.addAction(act_pause)
+        tb.addSeparator()
         act_update = QAction("⟳  Update yt-dlp", self)
         act_update.triggered.connect(self._update_ytdlp)
         tb.addAction(act_update)
         act_ext = QAction("🧩  Extension", self)
         act_ext.triggered.connect(self._show_onboarding)
         tb.addAction(act_ext)
-        tb.addSeparator()
-        lbl_conc = QLabel("  Concurrent ")
-        lbl_conc.setStyleSheet("color: #57606a;")
-        tb.addWidget(lbl_conc)
-        self.spin_conc = QSpinBox()
-        self.spin_conc.setRange(1, 10)
-        self.spin_conc.setValue(self.manager.pool.maxThreadCount())
-        self.spin_conc.valueChanged.connect(self._on_conc_changed)
-        tb.addWidget(self.spin_conc)
-        spacer = QWidget()
-        spacer.setFixedWidth(12)
-        tb.addWidget(spacer)
-        self.chk_aria = QCheckBox("aria2c (multi-connection)")
-        self.chk_aria.setChecked(self.manager.use_aria2c)
-        self.chk_aria.toggled.connect(self._on_aria_toggled)
-        tb.addWidget(self.chk_aria)
-        self.chk_organize = QCheckBox("Sort into folders")
-        self.chk_organize.setChecked(self.organize)
-        self.chk_organize.setToolTip(
-            "Sort downloads into Video / Music / Documents / Compressed / "
-            "Programs subfolders (like IDM)")
-        self.chk_organize.toggled.connect(self._on_organize_toggled)
-        tb.addWidget(self.chk_organize)
+        act_settings = QAction("⚙  Settings", self)
+        act_settings.triggered.connect(self._open_settings)
+        tb.addAction(act_settings)
 
         # header
         header = QLabel("YT Downloader")
@@ -617,6 +645,9 @@ class MainWindow(QMainWindow):
         url = (payload.get("url") or "").strip()
         if not url:
             return
+        if self._is_duplicate(url):
+            self.statusBar().showMessage("Already in queue — ignored duplicate.")
+            return
         selector = payload.get("selector") or "bestvideo+bestaudio/best"
         audio_only = bool(payload.get("audio_only")) or selector == AUDIO_MP3
         title = payload.get("title") or url
@@ -642,6 +673,9 @@ class MainWindow(QMainWindow):
         url = (payload.get("url") or "").strip()
         if not url:
             return
+        if self._is_duplicate(url):
+            self.statusBar().showMessage("Already in queue — ignored duplicate.")
+            return
         name = payload.get("filename") or ""
         if not name:
             # derive a filename from the URL path
@@ -659,6 +693,7 @@ class MainWindow(QMainWindow):
             referrer=payload.get("referrer", ""),
             cookies=payload.get("cookies", ""),
             user_agent=payload.get("userAgent", ""),
+            origin=payload.get("origin", ""),
             mime=payload.get("mime", ""),
             quality_label=file_kind(name),
         )
@@ -675,10 +710,14 @@ class MainWindow(QMainWindow):
         url = (payload.get("url") or "").strip()
         if not url:
             return
+        if self._is_duplicate(url):
+            self.statusBar().showMessage("Already in queue — ignored duplicate.")
+            return
         kind = (payload.get("kind") or "").lower()
         referrer = payload.get("referrer", "")
         cookies = payload.get("cookies", "")
         ua = payload.get("userAgent", "")
+        origin = payload.get("origin", "")
         title = payload.get("title", "") or os.path.basename(
             unquote(urlparse(url).path)) or "video"
 
@@ -695,7 +734,7 @@ class MainWindow(QMainWindow):
                 output_dir=self._dest_dir("Video"),
                 quality_label="HLS" if kind == "hls" else (
                     "DASH" if kind == "dash" else "Stream"),
-                referrer=referrer, cookies=cookies, user_agent=ua,
+                referrer=referrer, cookies=cookies, user_agent=ua, origin=origin,
             )
         else:
             # Direct media file with captured headers -> file engine.
@@ -704,7 +743,7 @@ class MainWindow(QMainWindow):
                 url=url, title=name, format_selector="", audio_only=False,
                 output_dir=self._dest_dir(utils.category_for_filename(name)),
                 engine=ENGINE_FILE, out_name=name,
-                referrer=referrer, cookies=cookies, user_agent=ua,
+                referrer=referrer, cookies=cookies, user_agent=ua, origin=origin,
                 quality_label=file_kind(name),
             )
 
@@ -763,6 +802,11 @@ class MainWindow(QMainWindow):
                                 "MP3 extraction needs ffmpeg, which was not found.")
             return
 
+        if self._is_duplicate(url):
+            QMessageBox.information(self, "Already in queue",
+                                    "This URL is already downloading or queued.")
+            return
+
         task = DownloadTask(
             url=url,
             title=self._pending_info.get("title", url),
@@ -796,6 +840,16 @@ class MainWindow(QMainWindow):
         task = self.manager.tasks.get(task_id)
         if task and task.status == COMPLETED and task_id not in self._recorded:
             self._record_history(task)
+        # Persist the queue on meaningful transitions (not every progress tick).
+        if task and task.status != DOWNLOADING:
+            self._save_queue()
+
+    def _is_duplicate(self, url: str) -> bool:
+        """True if this URL already has a non-finished task in the queue."""
+        return any(
+            t.url == url and t.status in (QUEUED, DOWNLOADING, PAUSED)
+            for t in self.manager.tasks.values()
+        )
 
     # -- history
     def _record_history(self, task: DownloadTask) -> None:
@@ -955,8 +1009,188 @@ class MainWindow(QMainWindow):
         box = QMessageBox.information if ok else QMessageBox.warning
         box(self, "yt-dlp update", msg + ("\n\nRestart the app to use it." if ok else ""))
 
+    # -- settings dialog
+    def _open_settings(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Settings")
+        dlg.setMinimumWidth(440)
+        form = QFormLayout(dlg)
+        form.setContentsMargins(20, 18, 20, 16)
+        form.setSpacing(12)
+
+        folder_row = QHBoxLayout()
+        folder_edit = QLineEdit(self.output_dir)
+        folder_edit.setReadOnly(True)
+        btn_b = QPushButton("Browse…")
+        folder_row.addWidget(folder_edit, 1)
+        folder_row.addWidget(btn_b)
+        form.addRow("Download folder", folder_row)
+
+        def browse():
+            d = QFileDialog.getExistingDirectory(dlg, "Choose folder", self.output_dir)
+            if d:
+                folder_edit.setText(d)
+        btn_b.clicked.connect(browse)
+
+        spin = QSpinBox()
+        spin.setRange(1, 10)
+        spin.setValue(self.manager.pool.maxThreadCount())
+        form.addRow("Max concurrent downloads", spin)
+
+        speed = QSpinBox()
+        speed.setRange(0, 1_000_000)
+        speed.setSuffix(" KB/s  (0 = unlimited)")
+        speed.setValue(self.manager.speed_limit_kbps)
+        form.addRow("Speed limit", speed)
+
+        theme_box = QComboBox()
+        theme_box.addItems(["light", "dark"])
+        theme_box.setCurrentText(self.theme)
+        form.addRow("Theme", theme_box)
+
+        chk_aria = QCheckBox("Use aria2c multi-connection (faster files)")
+        chk_aria.setChecked(self.manager.use_aria2c)
+        form.addRow("", chk_aria)
+        chk_org = QCheckBox("Sort downloads into category folders")
+        chk_org.setChecked(self.organize)
+        form.addRow("", chk_org)
+        chk_tray = QCheckBox("Close to tray (keep running in background)")
+        chk_tray.setChecked(self.close_to_tray)
+        form.addRow("", chk_tray)
+        chk_resume = QCheckBox("Auto-resume unfinished downloads on startup")
+        chk_resume.setChecked(self.auto_resume)
+        form.addRow("", chk_resume)
+        chk_startup = QCheckBox("Start with Windows")
+        chk_startup.setChecked(utils.is_run_on_startup())
+        form.addRow("", chk_startup)
+        chk_clip = QCheckBox("Watch clipboard for copied links")
+        chk_clip.setChecked(self.settings.value("clipboard_watch", False, type=bool))
+        form.addRow("", chk_clip)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        form.addRow(buttons)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        # apply
+        self.output_dir = folder_edit.text()
+        self.folder_edit.setText(self.output_dir)
+        self.settings.setValue("output_dir", self.output_dir)
+
+        self._on_conc_changed(spin.value())
+        self.manager.speed_limit_kbps = speed.value()
+        self.settings.setValue("speed_limit", speed.value())
+        self._on_aria_toggled(chk_aria.isChecked())
+        self._on_organize_toggled(chk_org.isChecked())
+        self.close_to_tray = chk_tray.isChecked()
+        self.settings.setValue("close_to_tray", self.close_to_tray)
+        self.auto_resume = chk_resume.isChecked()
+        self.settings.setValue("auto_resume", self.auto_resume)
+        utils.set_run_on_startup(chk_startup.isChecked())
+        self.settings.setValue("clipboard_watch", chk_clip.isChecked())
+
+        if theme_box.currentText() != self.theme:
+            self.theme = theme_box.currentText()
+            self.settings.setValue("theme", self.theme)
+            self.setStyleSheet(build_style(self.theme))
+
+    # -- persistence
+    def _save_queue(self):
+        entries = [task_to_dict(t) for t in self.manager.tasks.values()
+                   if t.status != COMPLETED]
+        self.queue_store.save(entries)
+
+    def _restore_queue(self):
+        for d in self.queue_store.load():
+            try:
+                task = task_from_dict(d)
+            except Exception:
+                continue
+            if task.status == COMPLETED:
+                continue
+            self.manager.restore_task(task)
+            self._add_row(task)
+        if self.manager.tasks:
+            self.statusBar().showMessage(
+                f"Restored {len(self.manager.tasks)} unfinished download(s).")
+            if self.auto_resume:
+                QTimer.singleShot(800, self.manager.resume_all)
+
+    # -- system tray
+    def _build_tray(self):
+        icon = QIcon(utils.app_icon_path()) if utils.app_icon_path() else \
+            self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowDown)
+        self.setWindowIcon(icon)
+        self.tray = QSystemTrayIcon(icon, self)
+        self.tray.setToolTip("YT Downloader")
+        menu = QMenu()
+        menu.addAction("Show window", self._show_from_tray)
+        menu.addAction("Resume all", self.manager.resume_all)
+        menu.addAction("Pause all", self.manager.pause_all)
+        menu.addSeparator()
+        menu.addAction("Quit", self._quit_app)
+        self.tray.setContextMenu(menu)
+        self.tray.activated.connect(self._on_tray_activated)
+        self.tray.show()
+
+    def _on_tray_activated(self, reason):
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            self._show_from_tray()
+
+    def _show_from_tray(self):
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _quit_app(self):
+        self._quitting = True
+        self.close()
+
+    # -- clipboard watch
+    def _start_clipboard_watch(self):
+        from PyQt6.QtWidgets import QApplication
+
+        self._clipboard = QApplication.clipboard()
+        self._clipboard.dataChanged.connect(self._on_clipboard)
+
+    def _on_clipboard(self):
+        if not self.settings.value("clipboard_watch", False, type=bool):
+            return
+        try:
+            text = (self._clipboard.text() or "").strip()
+        except Exception:
+            return
+        if not text or text == self._last_clip:
+            return
+        self._last_clip = text
+        if not text.lower().startswith(("http://", "https://")):
+            return
+        ext = utils.category_for_filename(text.split("?")[0])
+        looks_media = ext != "General" or "youtu" in text or "/watch" in text
+        if not looks_media or self._is_duplicate(text):
+            return
+        if QMessageBox.question(
+            self, "Download copied link?",
+            f"Download this copied link?\n\n{text[:120]}",
+        ) == QMessageBox.StandardButton.Yes:
+            self.url_edit.setText(text)
+            self._show_from_tray()
+            self._fetch()
+
     # -- lifecycle
     def closeEvent(self, event):  # noqa: N802
+        self._save_queue()
+        if self.close_to_tray and not self._quitting and self.tray.isVisible():
+            event.ignore()
+            self.hide()
+            self.tray.showMessage(
+                "YT Downloader", "Still running in the tray. Right-click to quit.",
+                QSystemTrayIcon.MessageIcon.Information, 3000)
+            return
         try:
             self.ipc.stop()
         except Exception:

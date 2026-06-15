@@ -101,6 +101,80 @@ captureEl.addEventListener("change", () => {
   chrome.runtime.sendMessage({ type: "setCapture", value: captureEl.checked });
 });
 
+// --- grab all links on the page ---
+const grabBtn = document.getElementById("grab");
+const grabList = document.getElementById("grablist");
+
+function tabSend(tabId, msg) {
+  return new Promise((resolve) => {
+    try {
+      chrome.tabs.sendMessage(tabId, msg, (r) => {
+        void chrome.runtime.lastError;
+        resolve(r || { ok: false });
+      });
+    } catch {
+      resolve({ ok: false });
+    }
+  });
+}
+
+grabBtn.addEventListener("click", async () => {
+  grabList.innerHTML = "<div class='hint'>Scanning…</div>";
+  const tab = await getActiveTab();
+  if (!tab) return;
+  const [page, media] = await Promise.all([
+    tabSend(tab.id, { type: "collectLinks" }),
+    new Promise((res) => chrome.runtime.sendMessage({ type: "getMedia" }, res)),
+  ]);
+  const items = [];
+  for (const s of (media && media.streams) || []) {
+    items.push({ url: s.url, label: "● " + s.label, kind: "stream", streamKind: s.kind, headers: s.headers || {} });
+  }
+  for (const l of (page && page.links) || []) {
+    items.push({ url: l.url, label: l.label, kind: "file" });
+  }
+  if (!items.length) {
+    grabList.innerHTML = "<div class='hint'>No downloadable links or media found.</div>";
+    return;
+  }
+
+  grabList.innerHTML = "";
+  items.forEach((it, i) => {
+    const row = document.createElement("label");
+    row.className = "grab-item";
+    row.innerHTML = `<input type="checkbox" data-i="${i}" checked><span title="${it.url}">${it.label}</span>`;
+    grabList.appendChild(row);
+  });
+  const dlBtn = document.createElement("button");
+  dlBtn.id = "grabdl";
+  dlBtn.textContent = `Download selected`;
+  grabList.appendChild(dlBtn);
+
+  dlBtn.addEventListener("click", async () => {
+    dlBtn.disabled = true;
+    const checks = grabList.querySelectorAll("input[type=checkbox]:checked");
+    let n = 0;
+    for (const c of checks) {
+      const it = items[Number(c.dataset.i)];
+      if (it.kind === "stream") {
+        await new Promise((res) => chrome.runtime.sendMessage({
+          type: "stream", url: it.url, kind: it.streamKind,
+          referrer: it.headers.referer || (tab.url || ""),
+          cookies: it.headers.cookie || "", userAgent: it.headers.userAgent || "",
+          origin: it.headers.origin || "",
+          title: it.label,
+        }, res));
+      } else {
+        await new Promise((res) => chrome.runtime.sendMessage({
+          type: "capture", url: it.url, referrer: tab.url || "",
+        }, res));
+      }
+      n++;
+    }
+    dlBtn.textContent = `Sent ${n} to app ✓`;
+  });
+});
+
 (async () => {
   const tab = await getActiveTab();
   currentUrl = (tab && tab.url) || "";

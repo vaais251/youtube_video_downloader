@@ -54,6 +54,7 @@ class DownloadTask:
     referrer: str = ""
     cookies: str = ""         # raw "Cookie:" header value
     user_agent: str = ""
+    origin: str = ""
     mime: str = ""
 
     status: str = QUEUED
@@ -78,6 +79,33 @@ def file_kind(name: str) -> str:
     return ext or "FILE"
 
 
+# Fields persisted to disk so the queue survives restarts.
+_PERSIST_FIELDS = (
+    "url", "title", "format_selector", "audio_only", "output_dir",
+    "quality_label", "engine", "id", "out_name", "referrer", "cookies",
+    "user_agent", "origin", "mime", "status", "progress", "filename", "total",
+)
+
+
+def task_to_dict(task: "DownloadTask") -> dict:
+    return {k: getattr(task, k) for k in _PERSIST_FIELDS}
+
+
+def task_from_dict(d: dict) -> "DownloadTask":
+    task = DownloadTask(
+        url=d.get("url", ""),
+        title=d.get("title", ""),
+        format_selector=d.get("format_selector", ""),
+        audio_only=bool(d.get("audio_only", False)),
+        output_dir=d.get("output_dir", ""),
+    )
+    for k in _PERSIST_FIELDS:
+        if k in d and k not in ("url", "title", "format_selector",
+                                "audio_only", "output_dir"):
+            setattr(task, k, d[k])
+    return task
+
+
 class _Paused(Exception):
     pass
 
@@ -98,10 +126,11 @@ class WorkerSignals(QObject):
 
 
 class DownloadWorker(QRunnable):
-    def __init__(self, task: DownloadTask, use_aria2c: bool):
+    def __init__(self, task: DownloadTask, use_aria2c: bool, speed_limit_kbps: int = 0):
         super().__init__()
         self.task = task
         self.use_aria2c = use_aria2c
+        self.speed_limit_kbps = speed_limit_kbps
         self.signals = WorkerSignals()
 
     def _hook(self, d: dict) -> None:
@@ -159,10 +188,15 @@ class DownloadWorker(QRunnable):
             hdrs["User-Agent"] = task.user_agent
         if task.referrer:
             hdrs["Referer"] = task.referrer
+        if task.origin:
+            hdrs["Origin"] = task.origin
         if task.cookies:
             hdrs["Cookie"] = task.cookies
         if hdrs:
             opts["http_headers"] = hdrs
+
+        if self.speed_limit_kbps:
+            opts["ratelimit"] = self.speed_limit_kbps * 1024  # bytes/sec
 
         if task.audio_only:
             if has_ffmpeg:
@@ -348,10 +382,11 @@ class FileDownloadWorker(QRunnable):
     authenticated/session downloads captured from the browser work.
     """
 
-    def __init__(self, task: DownloadTask, use_aria2c: bool):
+    def __init__(self, task: DownloadTask, use_aria2c: bool, speed_limit_kbps: int = 0):
         super().__init__()
         self.task = task
         self.use_aria2c = use_aria2c
+        self.speed_limit_kbps = speed_limit_kbps
         self.signals = WorkerSignals()
         self.proc = None
 
@@ -361,6 +396,43 @@ class FileDownloadWorker(QRunnable):
 
         name = self.task.out_name or self.task.title or "download"
         return os.path.join(self.task.output_dir, name)
+
+    def _resolve_name(self) -> None:
+        """Avoid clobbering an existing finished file: foo.zip -> foo (1).zip.
+        Runs once before downloading; skips if a partial download is resuming."""
+        import os
+
+        path = self._out_path()
+        if os.path.exists(path + ".part") or os.path.exists(path + ".aria2"):
+            return  # resuming an in-progress download — keep the name
+        if not os.path.exists(path):
+            return
+        root, ext = os.path.splitext(path)
+        i = 1
+        while os.path.exists(f"{root} ({i}){ext}"):
+            i += 1
+        self.task.out_name = os.path.basename(f"{root} ({i}){ext}")
+
+    def _request_headers(self) -> dict:
+        """Headers to replay the browser request. A sane Referer/Origin is what
+        gets past hotlink-protected CDNs that return 403 to bare requests."""
+        from urllib.parse import urlparse
+
+        t = self.task
+        h = {"User-Agent": t.user_agent or "Mozilla/5.0"}
+        referer = t.referrer
+        if not referer:
+            p = urlparse(t.url)
+            referer = f"{p.scheme}://{p.netloc}/"
+        h["Referer"] = referer
+        origin = t.origin
+        if not origin:
+            p = urlparse(referer)
+            origin = f"{p.scheme}://{p.netloc}"
+        h["Origin"] = origin
+        if t.cookies:
+            h["Cookie"] = t.cookies
+        return h
 
     def _emit_progress(self, done: int, total: int, speed_bps: float, eta_s):
         t = self.task
@@ -394,12 +466,14 @@ class FileDownloadWorker(QRunnable):
             f"--dir={task.output_dir}",
             f"--out={out_name}",
         ]
-        if task.cookies:
-            cmd.append(f"--header=Cookie: {task.cookies}")
-        if task.referrer:
-            cmd.append(f"--referer={task.referrer}")
-        if task.user_agent:
-            cmd.append(f"--user-agent={task.user_agent}")
+        if self.speed_limit_kbps:
+            cmd.append(f"--max-overall-download-limit={self.speed_limit_kbps}K")
+        hdrs = self._request_headers()
+        cmd.append(f"--referer={hdrs['Referer']}")
+        cmd.append(f"--user-agent={hdrs['User-Agent']}")
+        cmd.append(f"--header=Origin: {hdrs['Origin']}")
+        if hdrs.get("Cookie"):
+            cmd.append(f"--header=Cookie: {hdrs['Cookie']}")
         cmd.append(task.url)
 
         creationflags = 0x08000000 if os.name == "nt" else 0  # no console window
@@ -442,15 +516,7 @@ class FileDownloadWorker(QRunnable):
         part = out + ".part"
         existing = os.path.getsize(part) if os.path.exists(part) else 0
 
-        headers = {}
-        if task.user_agent:
-            headers["User-Agent"] = task.user_agent
-        else:
-            headers["User-Agent"] = "Mozilla/5.0"
-        if task.referrer:
-            headers["Referer"] = task.referrer
-        if task.cookies:
-            headers["Cookie"] = task.cookies
+        headers = self._request_headers()
         if existing:
             headers["Range"] = f"bytes={existing}-"
 
@@ -462,8 +528,10 @@ class FileDownloadWorker(QRunnable):
         total = int(resp.headers.get("Content-Length", 0) or 0) + existing
         mode = "ab" if existing else "wb"
 
+        limit_bps = self.speed_limit_kbps * 1024 if self.speed_limit_kbps else 0
         done = existing
         last_t, last_b = time.time(), done
+        rate_t, rate_b = time.time(), done
         with open(part, mode) as fh:
             while True:
                 if task.cancel_event.is_set():
@@ -476,6 +544,12 @@ class FileDownloadWorker(QRunnable):
                 fh.write(chunk)
                 done += len(chunk)
                 now = time.time()
+                # throttle to the speed limit
+                if limit_bps:
+                    elapsed = now - rate_t
+                    expected = (done - rate_b) / limit_bps
+                    if expected > elapsed:
+                        time.sleep(expected - elapsed)
                 if now - last_t >= 0.5:
                     speed = (done - last_b) / (now - last_t)
                     eta = (total - done) / speed if speed and total else 0
@@ -489,6 +563,7 @@ class FileDownloadWorker(QRunnable):
         if task.cancel_event.is_set():
             self.signals.canceled.emit(task.id)
             return
+        self._resolve_name()
         try:
             ok = (self._run_aria2c() if (self.use_aria2c and utils.aria2c_path())
                   else self._run_python())
@@ -528,12 +603,29 @@ class DownloadManager(QObject):
 
     task_changed = pyqtSignal(str)    # task id -> UI should refresh that row
 
-    def __init__(self, max_concurrent: int = 3, use_aria2c: bool = True):
+    def __init__(self, max_concurrent: int = 3, use_aria2c: bool = True,
+                 speed_limit_kbps: int = 0):
         super().__init__()
         self.tasks: dict[str, DownloadTask] = {}
         self.use_aria2c = use_aria2c
+        self.speed_limit_kbps = speed_limit_kbps
         self.pool = QThreadPool.globalInstance()
         self.set_max_concurrent(max_concurrent)
+
+    def restore_task(self, task: DownloadTask) -> None:
+        """Re-add a task loaded from disk without starting it (paused)."""
+        if task.status in (DOWNLOADING, QUEUED):
+            task.status = PAUSED
+        self.tasks[task.id] = task
+
+    def resume_all(self) -> None:
+        for tid, task in list(self.tasks.items()):
+            if task.status in (PAUSED, ERROR, QUEUED):
+                self._start(task)
+
+    def pause_all(self) -> None:
+        for tid in list(self.tasks):
+            self.pause(tid)
 
     def set_max_concurrent(self, n: int) -> None:
         self.pool.setMaxThreadCount(max(1, n))
@@ -551,9 +643,9 @@ class DownloadManager(QObject):
         self.task_changed.emit(task.id)
 
         if task.engine == ENGINE_FILE:
-            worker = FileDownloadWorker(task, self.use_aria2c)
+            worker = FileDownloadWorker(task, self.use_aria2c, self.speed_limit_kbps)
         else:
-            worker = DownloadWorker(task, self.use_aria2c)
+            worker = DownloadWorker(task, self.use_aria2c, self.speed_limit_kbps)
         worker.signals.progress.connect(self.task_changed)
         worker.signals.finished.connect(self.task_changed)
         worker.signals.paused.connect(self.task_changed)
